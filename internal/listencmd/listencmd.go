@@ -543,9 +543,14 @@ func (l *pollLoop) emitSummary() {
 
 // readCursor loads the previously-persisted cursor from
 // `<cwd>/.haij/listen-cursor`. Missing file returns an empty string
-// (the listener will start from "now").
+// (the listener will start from "now"). Anything but a regular file —
+// a symlink a checkout may ship — reads as missing, so another file's
+// contents never reach the server as a cursor.
 func readCursor(cwd string) string {
 	path := filepath.Join(cwd, CursorFileRel)
+	if fi, err := os.Lstat(path); err != nil || !fi.Mode().IsRegular() {
+		return ""
+	}
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -555,17 +560,33 @@ func readCursor(cwd string) string {
 
 // writeCursor atomically replaces `<cwd>/.haij/listen-cursor` with id.
 // Spec 30 test #31 — atomic so concurrent restarts never see a
-// partially-written file.
+// partially-written file. The temp file is a fresh, randomly named one
+// (os.CreateTemp opens with O_EXCL), never a fixed name that a symlink
+// could stand in for; the rename then replaces listen-cursor itself,
+// symlink or not, without following it.
 func writeCursor(cwd, id string) error {
 	dir := filepath.Join(cwd, ".haij")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp := filepath.Join(dir, "listen-cursor.tmp")
-	if err := os.WriteFile(tmp, []byte(id), 0o600); err != nil {
+	tmp, err := os.CreateTemp(dir, "listen-cursor-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(dir, "listen-cursor"))
+	if _, err := tmp.WriteString(id); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), filepath.Join(dir, "listen-cursor")); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 // MarshalJSON for tests asserting on the startup banner shape.

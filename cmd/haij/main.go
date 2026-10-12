@@ -195,8 +195,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Not a built-in command: an add-on `haij-<name>` on PATH runs it, the
-	// way git and gh find theirs. The plugin tools are one (haij-plugin,
-	// private while plugin building is internal).
+	// way git and gh find theirs.
 	if exit, ok := runAddon(rest, jsonMode, globalProfileFlag, stdout, stderr); ok {
 		return exit
 	}

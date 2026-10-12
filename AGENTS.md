@@ -7,7 +7,9 @@ has no database.
 
 The server half of every endpoint lives in the private `uppereight/haij` monorepo, not
 here. This repo is **public**; its history starts at v0.7.0 (2026-10-12). Earlier
-history, issues and releases are in the private `uppereight/haij-cli-internal`.
+history, issues and releases are in the private `uppereight/haij-cli-internal`, and
+`#<n>` references in code comments written before then (#4, #13, #24, …) mean issues
+and PRs there, not here. The five issues still open moved here with new numbers.
 
 ## Stack
 

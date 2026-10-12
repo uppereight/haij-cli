@@ -64,8 +64,8 @@ func TestAddonMissingOrOddName(t *testing.T) {
 	}
 }
 
-// TestNoPluginCommandsBuiltIn: the plugin tools live in the private
-// haij-plugin add-on, not in the public CLI.
+// TestNoPluginCommandsBuiltIn: plugin-building tooling is internal and
+// not part of this CLI.
 func TestNoPluginCommandsBuiltIn(t *testing.T) {
 	for _, line := range strings.Split(shortHelp, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "plugin ") {

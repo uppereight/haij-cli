@@ -1,0 +1,48 @@
+name: CI
+
+# Go quality gates for the haij CLI. Every step runs on repo-controlled
+# files only — no github.event.* values are interpolated into shell.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: gofmt -s (fails on any diff)
+        run: |
+          diff="$(gofmt -d -s .)"
+          if [ -n "$diff" ]; then
+            echo "::error::gofmt -d -s found unformatted files:"
+            echo "$diff"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test -count=1 ./...

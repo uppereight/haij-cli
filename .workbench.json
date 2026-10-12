@@ -1,0 +1,19 @@
+{
+  "models" : {
+    "level" : "standard",
+    "roles" : {
+      "t1" : [
+        {
+          "effort" : "max",
+          "model" : "sonnet"
+        },
+        {
+          "effort" : "medium",
+          "model" : "codex:gpt-6-sol"
+        }
+      ]
+    }
+  },
+  "setup" : "go build ./...",
+  "test" : "go test -count=1 ./..."
+}

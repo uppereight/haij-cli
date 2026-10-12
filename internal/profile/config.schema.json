@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://app.haij.eu/cli/config.schema.json",
+  "title": "haij CLI config.json",
+  "description": "Spec 30 Phase 3 (test #52). Schema for ~/.config/haij/config.json — the haij CLI's persistent profile store. The CLI writes this file on `haij auth login` and reads it on every subsequent invocation. A profile is fully self-contained (base URL + bearer + tenant identifiers) so the CLI can switch tenants in one shell with `--profile`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profiles", "default_profile"],
+  "properties": {
+    "profiles": {
+      "type": "object",
+      "description": "Map of profile name → profile object. The profile name is the `--profile` flag value (e.g. `staging`, `prod`, `demo`).",
+      "additionalProperties": { "$ref": "#/$defs/Profile" },
+      "minProperties": 1
+    },
+    "default_profile": {
+      "type": "string",
+      "description": "Profile name used when no `--profile` flag and no `HAIJ_PROFILE` env var is set. Must reference a key under `profiles`.",
+      "minLength": 1
+    }
+  },
+  "$defs": {
+    "Profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_url", "token", "company_id", "company_slug", "issued_at"],
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Tenant base URL (e.g. https://app.haij.eu).",
+          "examples": ["https://app.haij.eu", "https://staging.haij.eu"]
+        },
+        "token": {
+          "type": "string",
+          "description": "Bearer credential. Either a long-lived ApiKey (`haij_<64hex>`) or a device-flow access token (haij_<urlsafe>).",
+          "minLength": 16
+        },
+        "company_id": {
+          "type": "string",
+          "description": "UUID v7 of the tenant company. Cached so the CLI can include it in agent introspection (`haij commands --json`) without an extra round-trip."
+        },
+        "company_slug": {
+          "type": "string",
+          "description": "Human-readable tenant slug — surfaced in breadcrumb messages.",
+          "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+        },
+        "issued_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 timestamp of when the profile was created. Used for audit + entitlement TTL calculations."
+        },
+        "entitlements": {
+          "type": "object",
+          "description": "Optional cached plan-feature snapshot. Refreshed on a 24-hour cadence (test #14). Absent on a freshly-issued profile until the first command runs.",
+          "additionalProperties": false,
+          "properties": {
+            "cli": { "type": "boolean" },
+            "mcp": { "type": "boolean" },
+            "reason": { "type": "string" },
+            "checked_at": { "type": "string", "format": "date-time" }
+          }
+        }
+      }
+    }
+  }
+}

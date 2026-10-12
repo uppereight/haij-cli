@@ -1,0 +1,61 @@
+name: Release
+
+# Publishes a GitHub release when a v<semver> tag is pushed: the four
+# haij-<version>-<os>-<arch>.tar.gz archives, SHA256SUMS, and the
+# Homebrew formula rendered for them (haij.rb), all built by
+# scripts/release.sh. The tag reaches the shell only through env, never
+# through ${{ }} interpolation into a run: block.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check the tag is v<semver>
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::tag '$TAG' is not v<major>.<minor>.<patch>[-pre]"
+            exit 1
+          fi
+
+      - name: go vet and go test
+        run: |
+          go vet ./...
+          go test -count=1 ./...
+
+      - name: Build archives, SHA256SUMS and haij.rb
+        env:
+          TAG: ${{ github.ref_name }}
+        run: scripts/release.sh "${TAG#v}" "${GITHUB_SHA::7}" dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=(--title "haij ${TAG#v}" --generate-notes --verify-tag)
+          if [[ "$TAG" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" dist/*.tar.gz dist/SHA256SUMS dist/haij.rb "${flags[@]}"

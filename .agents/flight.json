@@ -1,0 +1,59 @@
+{
+  "build": {
+    "gate": "go test -count=1 ./...",
+    "gate_model": "haiku",
+    "max_escalations": 1,
+    "max_step_minutes": 20,
+    "orchestrated": true,
+    "pass_marker": "^ok",
+    "proof_prefixes": [
+      "go test -count=1 ",
+      "go test -count=1 ./...",
+      "test -f "
+    ],
+    "protected": [
+      ".agents/",
+      ".claude/",
+      ".github/",
+      "**/AGENTS.md",
+      "**/CLAUDE.md",
+      ".workbench.json",
+      "**/.env*"
+    ],
+    "test_dir": "cmd/haij",
+    "test_runner": "go test -count=1"
+  },
+  "issues": {
+    "label": "agent",
+    "ready_priorities": [
+      "p2",
+      "p3"
+    ],
+    "repo": "uppereight/haij-cli",
+    "sensitive_labels": [
+      "security-critical",
+      "pricing",
+      "api"
+    ]
+  },
+  "judge": {
+    "fix_rounds": 2,
+    "guidelines": [
+      "AGENTS.md"
+    ],
+    "layers": [
+      "spec",
+      "evidence",
+      "guidelines",
+      "judgment"
+    ]
+  },
+  "paths": {
+    "plans": "docs/plans",
+    "reports": "docs/reports"
+  },
+  "ship": {
+    "command": "gh pr create --fill"
+  },
+  "version": 1
+}

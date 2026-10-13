@@ -1205,6 +1205,11 @@ type Event struct {
 	OccurredAt string         `json:"occurred_at,omitempty"`
 	ReceivedAt string         `json:"received_at,omitempty"`
 	Payload    map[string]any `json:"payload,omitempty"`
+	// Synthetic is true on a delivery `haij trigger` fired
+	// (POST /api/v1/triggers), whose TriggerID is that call's event_id;
+	// a real event has false and nil (haij#1027).
+	Synthetic bool    `json:"synthetic,omitempty"`
+	TriggerID *string `json:"trigger_id,omitempty"`
 }
 
 // EventPage is the cursor-paginated events.list response. The

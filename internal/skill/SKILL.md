@@ -265,6 +265,12 @@ haij listen --forward-to http://localhost:9999/hook \
   --poll-interval=1s
 ```
 
+Without `.haij/listen-cursor` it starts from now: the first poll saves the
+newest event as the cursor and forwards nothing earlier (`--json` prints
+`{"action":"started","cursor":…,"skipped":N}`). A cursor file that is not an
+event id stops it with exit 2 and `invalid_cursor`; delete the file to start
+from now.
+
 ### `trigger` — fire a fixture event
 
 ```bash

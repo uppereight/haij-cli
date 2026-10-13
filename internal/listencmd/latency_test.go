@@ -148,8 +148,11 @@ func TestListenLatency_60EventStressMeetsBounds(t *testing.T) {
 	}
 	c := client.New(client.Config{BaseURL: api.URL, Token: "tok"})
 
+	// Resume from a cursor before the first emission: a listener with
+	// no cursor would take the events already out as its start
+	// (haij-cli#4) and forward none of them.
 	cwd := t.TempDir()
-	loop := newPollLoop(c, flags, "", cwd, &nullWriter{}, &nullWriter{}, true, RuntimeOptions{})
+	loop := newPollLoop(c, flags, "01G", cwd, &nullWriter{}, &nullWriter{}, true, RuntimeOptions{})
 
 	// Run the loop until every event has been received OR the
 	// 3-minute spec ceiling fires.

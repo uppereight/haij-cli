@@ -1136,11 +1136,11 @@ type ListEventsOptions struct {
 	Limit       int
 }
 
-// ListEvents tails /api/v1/events. The server is expected to return
-// events strictly newer than `since_cursor` (UUIDv7 sort order). When
-// the cursor is empty the server returns events emitted from "now" —
-// i.e. the listener does NOT replay history, matching the contract in
-// spec 30 test #30.
+// ListEvents tails /api/v1/events: events strictly newer than
+// `since_cursor` (UUIDv7 sort order). Without a cursor the server
+// returns up to the last hour; `haij listen` forwards none of those and
+// starts from the newest (haij-cli#4). A cursor that is not a UUID is
+// 422 validation_failed (haij#1030).
 func (c *Client) ListEvents(ctx context.Context, opts ListEventsOptions) (*EventPage, error) {
 	q := url.Values{}
 	if opts.SinceCursor != "" {

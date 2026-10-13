@@ -321,7 +321,7 @@ func TestListenForwardsEventsToLocalReceiver(t *testing.T) {
 
 	writeProfile(t, api.URL, "tok")
 
-	cwd := t.TempDir()
+	cwd := seededCwd(t)
 	var stdout, stderr bytes.Buffer
 	exit := RunWith(
 		[]string{"--forward-to", receiver.URL, "--events", "entry.updated", "--once", "--json"},
@@ -409,7 +409,7 @@ func TestListenSignsForwardedEventsWithLocalDevSecret(t *testing.T) {
 
 	writeProfile(t, api.URL, "tok")
 
-	cwd := t.TempDir()
+	cwd := seededCwd(t)
 	var stdout, stderr bytes.Buffer
 	exit := RunWith(
 		[]string{"--forward-to", receiver.URL, "--once", "--json"},
@@ -420,7 +420,12 @@ func TestListenSignsForwardedEventsWithLocalDevSecret(t *testing.T) {
 		t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
 	}
 
-	got := <-recvCh
+	var got captured
+	select {
+	case got = <-recvCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("receiver never got the forwarded event; stdout=%s", stdout.String())
+	}
 	// Re-derive: t=<unix>,v1=<hex(secret, "<unix>." + body)>.
 	parts := strings.SplitN(got.sig, ",", 2)
 	if len(parts) != 2 {
@@ -474,16 +479,11 @@ func TestListenCursorResumesAcrossRestarts(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 
 		var ids []string
-		if c == "" {
-			ids = []string{"01H001", "01H002", "01H003", "01H004", "01H005"}
-			if len(seenCursors) > 1 {
-				ids = nil // first poll only
-			}
-		}
-		// Second restart's poll sees cursor "01H005" — emit 3 new
-		// events past it.
-		if len(seenCursors) > 1 && c == "01H005" {
-			ids = []string{"01H006", "01H007", "01H008"}
+		switch c {
+		case eventID(0): // the seeded cursor: 5 events past it
+			ids = []string{eventID(1), eventID(2), eventID(3), eventID(4), eventID(5)}
+		case eventID(5): // the second run resumes here: 3 new events
+			ids = []string{eventID(6), eventID(7), eventID(8)}
 		}
 
 		out := map[string]any{
@@ -499,9 +499,9 @@ func TestListenCursorResumesAcrossRestarts(t *testing.T) {
 
 	writeProfile(t, api.URL, "tok")
 
-	cwd := t.TempDir()
+	cwd := seededCwd(t)
 
-	// First run — consumes the initial 5 events.
+	// First run — resumes from the seeded cursor, consumes 5 events.
 	var stdout, stderr bytes.Buffer
 	exit := RunWith(
 		[]string{"--forward-to", receiver.URL, "--once", "--json"},
@@ -511,8 +511,8 @@ func TestListenCursorResumesAcrossRestarts(t *testing.T) {
 	if exit != 0 {
 		t.Fatalf("first run exit=%d stderr=%s", exit, stderr.String())
 	}
-	if got := readCursor(cwd); got != "01H005" {
-		t.Errorf("after first run cursor=%q, want 01H005", got)
+	if got := readCursor(cwd); got != eventID(5) {
+		t.Errorf("after first run cursor=%q, want %s", got, eventID(5))
 	}
 
 	// Second run — same cwd, fresh process — must resume from the
@@ -529,8 +529,8 @@ func TestListenCursorResumesAcrossRestarts(t *testing.T) {
 	}
 
 	// Assert the server saw the persisted cursor on the second poll.
-	if len(seenCursors) < 2 || seenCursors[1] != "01H005" {
-		t.Errorf("second poll should carry since_cursor=01H005, got %v", seenCursors)
+	if len(seenCursors) < 2 || seenCursors[1] != eventID(5) {
+		t.Errorf("second poll should carry since_cursor=%s, got %v", eventID(5), seenCursors)
 	}
 
 	// Assert receiver got exactly 5 + 3 events and never re-saw the
@@ -540,7 +540,7 @@ func TestListenCursorResumesAcrossRestarts(t *testing.T) {
 	for c := range recvCh {
 		got = append(got, c.id)
 	}
-	want := []string{"01H001", "01H002", "01H003", "01H004", "01H005", "01H006", "01H007", "01H008"}
+	want := []string{eventID(1), eventID(2), eventID(3), eventID(4), eventID(5), eventID(6), eventID(7), eventID(8)}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d deliveries, got %d (%v)", len(want), len(got), got)
 	}
@@ -549,8 +549,8 @@ func TestListenCursorResumesAcrossRestarts(t *testing.T) {
 			t.Errorf("delivery[%d]=%q, want %q", i, got[i], id)
 		}
 	}
-	if final := readCursor(cwd); final != "01H008" {
-		t.Errorf("final cursor=%q, want 01H008", final)
+	if final := readCursor(cwd); final != eventID(8) {
+		t.Errorf("final cursor=%q, want %s", final, eventID(8))
 	}
 }
 
@@ -567,4 +567,20 @@ func lastID(ids []string) string {
 		return ""
 	}
 	return ids[len(ids)-1]
+}
+
+// eventID returns a UUIDv7-shaped event id that sorts by n.
+func eventID(n int) string {
+	return fmt.Sprintf("0192a000-0000-7000-8000-%012d", n)
+}
+
+// seededCwd returns a working directory whose cursor file holds
+// eventID(0): a listener that resumes, so its first poll forwards.
+func seededCwd(t *testing.T) string {
+	t.Helper()
+	cwd := t.TempDir()
+	if err := writeCursor(cwd, eventID(0)); err != nil {
+		t.Fatal(err)
+	}
+	return cwd
 }

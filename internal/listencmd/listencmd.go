@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -124,6 +125,34 @@ func RunWith(args []string, globalProfileFlag string, jsonMode bool, stdout, std
 		return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
 	}
 
+	cwd := rt.Cwd
+	if cwd == "" {
+		if v := os.Getenv("HAIJ_CWD"); v != "" {
+			cwd = v
+		} else {
+			cwd, _ = os.Getwd()
+		}
+	}
+
+	// A cursor file that is not an event id never reaches the server
+	// (haij-cli#4): every poll would fail on it, so stop and name the
+	// file. Deleting it starts from now.
+	cursor := readCursor(cwd)
+	if cursor != "" && !eventIDPattern.MatchString(cursor) {
+		path := filepath.Join(cwd, CursorFileRel)
+		shown := cursor
+		if len(shown) > 40 {
+			shown = shown[:40] + "…"
+		}
+		env := envelope.Failure(
+			"invalid_cursor",
+			fmt.Sprintf("%s holds %q, which is not an event id; delete it to start from now", path, cmdutil.TerminalSafe(shown)),
+			map[string]any{"cursor_file": path},
+		)
+		env.Breadcrumbs = []envelope.Breadcrumb{{Action: "start from now", Cmd: "rm " + path}}
+		return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
+	}
+
 	res := cmdutil.ResolveAndPreflight(cmdutil.ResolveOptions{
 		GlobalProfileFlag: globalProfileFlag,
 		JSONMode:          jsonMode,
@@ -134,15 +163,6 @@ func RunWith(args []string, globalProfileFlag string, jsonMode bool, stdout, std
 	})
 	if !res.ExitOK {
 		return res.ExitCode
-	}
-
-	cwd := rt.Cwd
-	if cwd == "" {
-		if v := os.Getenv("HAIJ_CWD"); v != "" {
-			cwd = v
-		} else {
-			cwd, _ = os.Getwd()
-		}
 	}
 
 	// Emit a startup banner BEFORE the first poll so test #32 can
@@ -156,10 +176,6 @@ func RunWith(args []string, globalProfileFlag string, jsonMode bool, stdout, std
 		ClampReason:      clampWarning,
 	}
 	emitStartup(stdout, stderr, jsonMode, startup)
-
-	// Without a pre-existing cursor file the listener starts from
-	// "now" — events older than startup are not re-delivered.
-	cursor := readCursor(cwd)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -304,6 +320,9 @@ type pollLoop struct {
 	stop     time.Duration
 	doer     func(*http.Request) (*http.Response, error)
 
+	// started is false until the listener has a starting point: a
+	// cursor from the file, or the first poll's newest event.
+	started   bool
 	delivered int
 }
 
@@ -313,7 +332,7 @@ func newPollLoop(c *client.Client, f *flagSet, cursor, cwd string, stdout, stder
 		now = time.Now
 	}
 	return &pollLoop{
-		c: c, flags: f, cursor: cursor, cwd: cwd,
+		c: c, flags: f, cursor: cursor, cwd: cwd, started: cursor != "",
 		stdout: stdout, stderr: stderr, jsonMode: jsonMode,
 		now: now, stop: rt.StopAfter, doer: rt.HTTPDoer,
 	}
@@ -365,6 +384,10 @@ func (l *pollLoop) tickOnce(ctx context.Context) {
 	if l.c == nil {
 		return
 	}
+	if !l.started {
+		l.startFromNow(ctx)
+		return
+	}
 	page, err := l.c.ListEvents(ctx, client.ListEventsOptions{
 		SinceCursor: l.cursor,
 		Names:       l.flags.events,
@@ -394,6 +417,53 @@ func (l *pollLoop) tickOnce(ctx context.Context) {
 		}
 		l.emitDelivered(ev)
 	}
+}
+
+// startFromNow is the first poll of a listener without a cursor file
+// (haij-cli#4, owner decision on haij#1030). Without since_cursor the
+// server returns up to an hour of past events; the listener forwards
+// none of them, takes the newest id as its cursor and saves it. When
+// that hour is empty there is no id to take, but every event a later
+// cursor-less poll returns is then newer than the start, so forwarding
+// resumes as usual from the next tick.
+func (l *pollLoop) startFromNow(ctx context.Context) {
+	cursor, skipped := "", 0
+	for {
+		page, err := l.c.ListEvents(ctx, client.ListEventsOptions{
+			SinceCursor: cursor,
+			Names:       l.flags.events,
+			Limit:       100,
+		})
+		if err != nil {
+			l.emitPollError(err) // not started: the next tick tries again
+			return
+		}
+		if page == nil || len(page.Data) == 0 {
+			break
+		}
+		skipped += len(page.Data)
+		cursor = page.Data[len(page.Data)-1].ID
+		if !page.HasMore {
+			break
+		}
+	}
+	l.started = true
+	if cursor != "" {
+		l.cursor = cursor
+		if err := writeCursor(l.cwd, l.cursor); err != nil {
+			fmt.Fprintf(l.stderr, "haij listen: cursor write failed: %v\n", err)
+		}
+	}
+	if l.jsonMode {
+		b, _ := json.Marshal(map[string]any{"ok": true, "action": "started", "cursor": l.cursor, "skipped": skipped})
+		fmt.Fprintln(l.stdout, string(b))
+		return
+	}
+	noun := "events"
+	if skipped == 1 {
+		noun = "event"
+	}
+	fmt.Fprintf(l.stdout, "starting from now (%d earlier %s not forwarded)\n", skipped, noun)
 }
 
 // forwardEvent re-signs the event payload with the local dev secret and
@@ -541,9 +611,13 @@ func (l *pollLoop) emitSummary() {
 	fmt.Fprintf(l.stdout, "stopped — %d events delivered (cursor=%s)\n", l.delivered, l.cursor)
 }
 
+// eventIDPattern is the shape of an event id (a UUID), the only cursor
+// the server accepts: anything else is 422 validation_failed.
+var eventIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 // readCursor loads the previously-persisted cursor from
 // `<cwd>/.haij/listen-cursor`. Missing file returns an empty string
-// (the listener will start from "now"). Anything but a regular file —
+// (the listener will start from "now"); Run checks the shape. Anything but a regular file —
 // a symlink a checkout may ship — reads as missing, so another file's
 // contents never reach the server as a cursor.
 func readCursor(cwd string) string {
@@ -600,6 +674,11 @@ const helpText = `Usage: haij listen --forward-to <url> [flags]
 Poll /api/v1/events and forward each new event, re-signed with the local
 dev secret, to a local HTTP receiver. The cursor persists in
 .haij/listen-cursor so a restart resumes where the last run stopped.
+
+Without a cursor file it starts from now: the first poll saves the
+newest event as the cursor and forwards nothing earlier. A cursor file
+that is not an event id stops the listener (exit 2, invalid_cursor);
+delete the file to start from now.
 
 Required:
   --forward-to <url>       Local receiver, e.g. http://localhost:3000/webhooks

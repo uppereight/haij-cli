@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"regexp"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -194,7 +193,7 @@ func splitList(v string) []string {
 
 // nextPageCmd repeats the search with the next cursor.
 func nextPageCmd(opts client.SearchOptions, cursor string) string {
-	parts := []string{"haij search", shellQuote(opts.Query)}
+	parts := []string{"haij search", cmdutil.ShellQuote(opts.Query)}
 	if len(opts.Types) > 0 {
 		parts = append(parts, "--types", strings.Join(opts.Types, ","))
 	}
@@ -204,16 +203,7 @@ func nextPageCmd(opts client.SearchOptions, cursor string) string {
 	if opts.Limit > 0 {
 		parts = append(parts, "--limit", strconv.Itoa(opts.Limit))
 	}
-	return strings.Join(append(parts, "--cursor", shellQuote(cursor)), " ")
-}
-
-var plainWord = regexp.MustCompile(`^[A-Za-z0-9._@:/+-]+$`)
-
-func shellQuote(s string) string {
-	if plainWord.MatchString(s) {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+	return strings.Join(append(parts, "--cursor", cmdutil.ShellQuote(cursor)), " ")
 }
 
 func pluralS(n int) string {

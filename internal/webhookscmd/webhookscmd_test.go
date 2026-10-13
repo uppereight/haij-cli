@@ -407,3 +407,43 @@ func TestWebhooksSecretStaysOutOfKeyAndArgv(t *testing.T) {
 		t.Errorf("empty stdin: exit=%d requests=%d", exit, len(keys)-n)
 	}
 }
+
+// TestDeliveriesShowSyntheticMarker (#5): a delivery `haij trigger`
+// fired keeps synthetic and trigger_id in --json and is marked in the
+// table; a real one is not (haij#1027).
+func TestDeliveriesShowSyntheticMarker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"d1","webhook_id":"wh1","event_type":"entry.created","status":"succeeded","attempt_count":1,"created_at":"2026-10-13T08:00:00Z","synthetic":true,"trigger_id":"evt1"},
+			{"id":"d2","webhook_id":"wh1","event_type":"entry.updated","status":"succeeded","attempt_count":1,"created_at":"2026-10-13T08:01:00Z","synthetic":false,"trigger_id":null}
+		],"has_more":false,"next_cursor":null}`))
+	}))
+	defer srv.Close()
+	configHome(t)
+	writeProfile(t, srv.URL, "test-token")
+
+	var stdout, stderr bytes.Buffer
+	if exit := RunWith([]string{"deliveries", "--json"}, "", false, &stdout, &stderr, stubFactory(srv)); exit != 0 {
+		t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
+	}
+	var env struct {
+		Data struct {
+			Data []map[string]any `json:"data"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v\n%s", err, stdout.String())
+	}
+	if d := env.Data.Data; len(d) != 2 || d[0]["synthetic"] != true || d[0]["trigger_id"] != "evt1" || d[1]["synthetic"] != false {
+		t.Errorf("deliveries = %v", env.Data.Data)
+	}
+
+	stdout.Reset()
+	if exit := RunWith([]string{"deliveries"}, "", false, &stdout, &stderr, stubFactory(srv)); exit != 0 {
+		t.Fatalf("exit=%d", exit)
+	}
+	if out := stdout.String(); !strings.Contains(out, "entry.created (trigger)") || strings.Contains(out, "entry.updated (trigger)") {
+		t.Errorf("table:\n%s", out)
+	}
+}

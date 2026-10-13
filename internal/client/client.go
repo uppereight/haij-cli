@@ -555,6 +555,93 @@ func (c *Client) RunWorkflow(ctx context.Context, id string, payload map[string]
 	return &wrap.Data, nil
 }
 
+// SearchHit is one hit of GET /api/v1/search (haij#1012). Type is
+// "form", "entry" or "workflow" and decides which other fields are set:
+// a form has Title, Status, Snippet and UpdatedAt; an entry has FormID
+// and SubmittedAt only (no answers: fetch it with GetEntry); a workflow
+// has Name, Status and TriggerType. It marshals back to exactly the
+// object the server sent, so --json and the MCP tool pass the hit
+// through unchanged, a type added later included.
+type SearchHit struct {
+	Type        string `json:"type"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Status      string `json:"status"`
+	Snippet     string `json:"snippet"`
+	UpdatedAt   string `json:"updated_at"`
+	FormID      string `json:"form_id"`
+	SubmittedAt string `json:"submitted_at"`
+	Name        string `json:"name"`
+	TriggerType string `json:"trigger_type"`
+
+	raw json.RawMessage
+}
+
+// searchHitFields is SearchHit without its methods, for decoding.
+type searchHitFields SearchHit
+
+// UnmarshalJSON decodes the fields and keeps the server's object.
+func (h *SearchHit) UnmarshalJSON(b []byte) error {
+	var f searchHitFields
+	if err := json.Unmarshal(b, &f); err != nil {
+		return err
+	}
+	*h = SearchHit(f)
+	h.raw = append(json.RawMessage(nil), b...)
+	return nil
+}
+
+// MarshalJSON returns the object the server sent.
+func (h SearchHit) MarshalJSON() ([]byte, error) {
+	if h.raw != nil {
+		return h.raw, nil
+	}
+	return json.Marshal(searchHitFields(h))
+}
+
+// SearchPage is the cursor-paginated search response.
+type SearchPage struct {
+	Data       []SearchHit `json:"data"`
+	HasMore    bool        `json:"has_more"`
+	NextCursor string      `json:"next_cursor"`
+}
+
+// SearchOptions controls Search. Query is required (the server answers
+// a blank one with 422). Types narrows the hit types (form, entry,
+// workflow; all three when empty). Entries are searched within FormIDs
+// (at most 100), else within the last 90 days.
+type SearchOptions struct {
+	Query   string
+	Types   []string
+	FormIDs []string
+	Limit   int
+	Cursor  string
+}
+
+// Search returns one page of the tenant's forms, entries and workflows
+// matching opts.Query, newest first across the three types.
+func (c *Client) Search(ctx context.Context, opts SearchOptions) (*SearchPage, error) {
+	q := url.Values{}
+	q.Set("q", opts.Query)
+	for _, t := range opts.Types {
+		q.Add("types[]", t)
+	}
+	for _, id := range opts.FormIDs {
+		q.Add("form_ids[]", id)
+	}
+	if opts.Limit > 0 {
+		q.Set("limit", strconv.Itoa(opts.Limit))
+	}
+	if opts.Cursor != "" {
+		q.Set("cursor", opts.Cursor)
+	}
+	var out SearchPage
+	if err := c.do(ctx, "GET", "/api/v1/search", q, nil, "", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Webhook is the public-API shape of a webhook subscription
 // (spec 30 #27, #28). The signing secret is NEVER returned over the wire
 // after creation — `secret_prefix` is the safe substitute.

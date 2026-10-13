@@ -260,19 +260,27 @@ var tools = []Tool{
 		Name:        "haij_search",
 		Title:       "Search forms, entries and workflows",
 		Annotations: Annotations{Title: "Search forms, entries and workflows", ReadOnlyHint: true, IdempotentHint: true},
-		Description: "Full-text search across forms, entries, and workflows scoped to the active tenant. Filter by `types` to narrow.",
+		Description: "Searches the active tenant's forms (title, description), workflows (name) and entries (answers), newest first across the three types. Entries are searched within `form_ids`, else within the last 90 days. An entry hit is ids only (`id`, `form_id`, `submitted_at`): page haij_list_entries for that form to read its answers. Cursor pagination — pass `next_cursor` as `cursor` for the next page.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"required": ["query"],
 			"properties": {
-				"query": {"type": "string", "minLength": 1, "description": "Search query string."},
+				"query": {"type": "string", "minLength": 1, "description": "Search text. The server cuts it at 500 characters."},
 				"types": {
 					"type": "array",
-					"description": "Filter results to these record types. Defaults to all three when omitted.",
+					"description": "Only these hit types. All three when omitted.",
 					"items": {"type": "string", "enum": ["form", "entry", "workflow"]},
 					"uniqueItems": true
 				},
-				"limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum results across all types (1..100)."}
+				"form_ids": {
+					"type": "array",
+					"description": "Search entries only within these forms (form uuids), with no date bound. Forms and workflows are not filtered by it.",
+					"items": {"type": "string"},
+					"maxItems": 100,
+					"uniqueItems": true
+				},
+				"cursor": {"type": "string", "description": "Opaque cursor returned from the previous page."},
+				"limit":  {"type": "integer", "minimum": 1, "maximum": 100, "description": "Page size (1..100)."}
 			},
 			"additionalProperties": false
 		}`),

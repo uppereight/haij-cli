@@ -241,6 +241,22 @@ haij contacts consent grant <contact_id> \
 A contact who withdrew or was denied cannot be re-granted over the API
 (409 `consent_withdrawn`); the person opts in again themselves.
 
+### `search` — find forms, entries and workflows
+
+```bash
+haij search "lead capture" --json
+haij search acme --types entry --form-ids <form_id>,<form_id> --json
+haij search acme --limit 20 --cursor <next_cursor> --json
+```
+
+Newest first across the three types. A form matches on its title or
+description, a workflow on its name, an entry on its answers. Entries are
+searched within `--form-ids` (up to 100), else within the last 90 days, so
+pass the form ids to reach older ones. An entry hit is ids only (`id`,
+`form_id`, `submitted_at`): read it with `haij entries get --form-id
+<form_id> <id>`. A blank query is a usage error (exit 2). The MCP tool
+`haij_search` calls the same endpoint.
+
 ### `apikeys` — manage API keys
 
 ```bash

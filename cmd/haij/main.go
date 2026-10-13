@@ -38,6 +38,7 @@ import (
 	"github.com/uppereight/haij-cli/internal/mcpcmd"
 	"github.com/uppereight/haij-cli/internal/mcpserve"
 	"github.com/uppereight/haij-cli/internal/mcptools"
+	"github.com/uppereight/haij-cli/internal/searchcmd"
 	"github.com/uppereight/haij-cli/internal/skill"
 	"github.com/uppereight/haij-cli/internal/templatescmd"
 	"github.com/uppereight/haij-cli/internal/triggercmd"
@@ -175,6 +176,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return webhookscmd.Run(rest[1:], globalProfileFlag, subJSON, stdout, stderr)
 	case "templates":
 		return templatescmd.Run(rest[1:], globalProfileFlag, subJSON, stdout, stderr)
+	case "search":
+		return searchcmd.Run(rest[1:], globalProfileFlag, subJSON, stdout, stderr)
 	case "contacts":
 		return contactscmd.Run(rest[1:], globalProfileFlag, subJSON, stdout, stderr)
 	case "apikeys":
@@ -449,6 +452,7 @@ Top-level commands:
   webhooks     Manage outbound webhooks (list/get/create/update/destroy/test/deliveries/retry)
   templates    Email templates (list/get/preview/create)
   contacts     Find, upsert and update contacts; grant or withdraw email consent
+  search       Search forms, entries and workflows
   apikeys      Manage API keys
   listen       Tail events and forward to a local URL
   trigger      Fire a fixture event through the webhook pipeline

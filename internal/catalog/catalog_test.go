@@ -286,6 +286,7 @@ func entryFunc(name string) string {
 		"haij doctor":                    "doctorcmd.Run",
 		"haij listen":                    "listencmd.RunWith",
 		"haij trigger":                   "triggercmd.RunWith",
+		"haij search":                    "searchcmd.RunWith",
 		"haij mcp serve":                 "mcpcmd.RunServeWith",
 		"haij mcp tools":                 "main.runMcpTools",
 		"haij commands":                  "main.runCommands",

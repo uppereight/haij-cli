@@ -50,6 +50,15 @@
           "format": "date-time",
           "description": "RFC 3339 timestamp of when the profile was created. Used for audit + entitlement TTL calculations."
         },
+        "plan": {
+          "type": "string",
+          "description": "The tenant's plan as `GET /api/v1/whoami` reported it at login. Shown by `haij auth whoami`. Absent when the server did not report one."
+        },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "The API key's scopes (e.g. `read`, `write`) as `GET /api/v1/whoami` reported them at login. Absent when the server did not report any."
+        },
         "entitlements": {
           "type": "object",
           "description": "Optional cached plan-feature snapshot. Refreshed on a 24-hour cadence (test #14). Absent on a freshly-issued profile until the first command runs.",

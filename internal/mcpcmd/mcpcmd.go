@@ -377,36 +377,32 @@ func handleRunWorkflow(ctx context.Context, c *client.Client, args map[string]an
 	return successResult(exec), nil
 }
 
-// handleSearch is the haij_search adapter (spec 30 test #88).
+// handleSearch is the haij_search adapter (spec 30 test #88): one page
+// of GET /api/v1/search (haij#1012, haij-cli#3).
 //
 // Wire shape — the standard successResult, plus _meta:
 //
 //	{
 //	  content: [{"type":"text", "text": <the structuredContent as JSON>}],
-//	  structuredContent: {results: [
-//	    {"type":"form",     "id":..., "title":..., "status":..., ...},
-//	    {"type":"entry",    "id":..., "form_id":..., "external_id":..., ...},
-//	    {"type":"workflow", "id":..., "name":..., "status":..., ...}
-//	  ]},
+//	  structuredContent: {
+//	    results: [
+//	      {"type":"form",     "id", "title", "status", "snippet", "updated_at"},
+//	      {"type":"entry",    "id", "form_id", "submitted_at"},
+//	      {"type":"workflow", "id", "name", "status", "trigger_type"}
+//	    ],
+//	    has_more, next_cursor
+//	  },
 //	  _meta: {haij: {query, types, total}}
 //	}
 //
-// Each result is a homogeneous-shape object with a discriminator
-// `type` field. Agents can fan out into the right rendering path by
-// switching on `type` instead of probing for entity-specific fields.
+// The hits are the server's objects, unchanged. An entry hit is ids
+// only; entries are searched within form_ids, else the last 90 days.
 // The results never go in content itself: an item typed `form` is not
-// an MCP ContentBlock (haij-cli #17).
-//
-// Until /api/v1/search is exposed, we fan out to the typed list
-// endpoints (forms / entries / workflows) and union the results
-// client-side. RLS scoping comes for free because every list endpoint
-// is already tenant-scoped on the bearer token.
-//
-// `query` is required; `types` filters the result mix (defaults to all
-// three when omitted). `limit` caps total results across all types.
+// an MCP ContentBlock (haij-cli #17). A server without the route
+// answers http_404; there is no client-side fallback.
 func handleSearch(ctx context.Context, c *client.Client, args map[string]any) (any, error) {
 	query, _ := args["query"].(string)
-	if query == "" {
+	if strings.TrimSpace(query) == "" {
 		return nil, &codedError{
 			code:    "validation_failed",
 			status:  422,
@@ -414,166 +410,51 @@ func handleSearch(ctx context.Context, c *client.Client, args map[string]any) (a
 			details: []map[string]any{{"field": "query", "message": "can't be blank"}},
 		}
 	}
-	types := pickTypes(args["types"])
-	limit := 10
+	opts := client.SearchOptions{
+		Query:   query,
+		Types:   stringList(args["types"]),
+		FormIDs: stringList(args["form_ids"]),
+	}
 	if v, ok := args["limit"].(float64); ok && int(v) > 0 {
-		limit = int(v)
+		opts.Limit = int(v)
+	}
+	if v, ok := args["cursor"].(string); ok {
+		opts.Cursor = v
 	}
 
-	q := strings.ToLower(query)
-	hits := []map[string]any{}
-
-	if hasType(types, "form") {
-		page, err := c.ListForms(ctx, client.ListFormsOptions{Limit: limit})
-		if err == nil {
-			for _, f := range page.Data {
-				if !matchesQuery(q, f.Title, f.Description, f.Status) {
-					continue
-				}
-				hits = append(hits, map[string]any{
-					"type":         "form",
-					"id":           f.ID,
-					"title":        f.Title,
-					"status":       f.Status,
-					"display_mode": f.DisplayMode,
-					"updated_at":   f.UpdatedAt,
-				})
-				if len(hits) >= limit {
-					break
-				}
-			}
-		}
+	page, err := c.Search(ctx, opts)
+	if err != nil {
+		return nil, wrapAPIError(err)
 	}
-
-	if hasType(types, "entry") && len(hits) < limit {
-		// Entries are scoped by form; for haij_search we walk recent
-		// forms and pull a slim page of entries from each. Cheap
-		// enough for the curated tool surface (server-side
-		// /api/v1/search will replace this once it lands).
-		page, err := c.ListForms(ctx, client.ListFormsOptions{Limit: 5})
-		if err == nil {
-		formLoop:
-			for _, f := range page.Data {
-				eg, err := c.ListEntries(ctx, client.ListEntriesOptions{FormID: f.ID, Limit: limit})
-				if err != nil {
-					continue
-				}
-				for _, e := range eg.Data {
-					if !matchesQuery(q, entryEmail(e), e.ExternalID) {
-						continue
-					}
-					hits = append(hits, map[string]any{
-						"type":         "entry",
-						"id":           e.ID,
-						"form_id":      e.FormID,
-						"external_id":  e.ExternalID,
-						"submitted_at": e.SubmittedAt,
-					})
-					if len(hits) >= limit {
-						break formLoop
-					}
-				}
-			}
-		}
+	result := successResult(map[string]any{
+		"results":     page.Data,
+		"has_more":    page.HasMore,
+		"next_cursor": page.NextCursor,
+	})
+	types := opts.Types
+	if len(types) == 0 {
+		types = []string{"form", "entry", "workflow"}
 	}
-
-	if hasType(types, "workflow") && len(hits) < limit {
-		page, err := c.ListWorkflows(ctx, limit, "")
-		if err == nil {
-			for _, w := range page.Data {
-				if !matchesQuery(q, w.Name, w.Status, w.TriggerType) {
-					continue
-				}
-				hits = append(hits, map[string]any{
-					"type":         "workflow",
-					"id":           w.ID,
-					"name":         w.Name,
-					"status":       w.Status,
-					"trigger_type": w.TriggerType,
-				})
-				if len(hits) >= limit {
-					break
-				}
-			}
-		}
-	}
-
-	result := successResult(map[string]any{"results": hits})
 	result["_meta"] = map[string]any{
 		"haij": map[string]any{
 			"query": query,
 			"types": types,
-			"total": len(hits),
+			"total": len(page.Data),
 		},
 	}
 	return result, nil
 }
 
-// matchesQuery is a forgiving substring match used by handleSearch
-// against any number of candidate strings. An empty query matches
-// everything (the server-side /api/v1/search uses Postgres ts_query;
-// we approximate here).
-func matchesQuery(q string, candidates ...string) bool {
-	if q == "" {
-		return true
-	}
-	for _, c := range candidates {
-		if c == "" {
-			continue
-		}
-		if strings.Contains(strings.ToLower(c), q) {
-			return true
+// stringList returns the strings of a JSON array argument.
+func stringList(v any) []string {
+	arr, _ := v.([]any)
+	var out []string
+	for _, x := range arr {
+		if s, ok := x.(string); ok && s != "" {
+			out = append(out, s)
 		}
 	}
-	return false
-}
-
-// entryEmail extracts a submitter_email from an Entry's free-form
-// response_data, falling back to data when the older shape is in play.
-// Used by handleSearch to match queries like "lead@acme.com".
-func entryEmail(e client.Entry) string {
-	if e.ResponseData != nil {
-		if v, ok := e.ResponseData["submitter_email"].(string); ok {
-			return v
-		}
-		if v, ok := e.ResponseData["email"].(string); ok {
-			return v
-		}
-	}
-	if e.Data != nil {
-		if v, ok := e.Data["submitter_email"].(string); ok {
-			return v
-		}
-		if v, ok := e.Data["email"].(string); ok {
-			return v
-		}
-	}
-	return ""
-}
-
-func pickTypes(v any) []string {
-	if arr, ok := v.([]any); ok {
-		out := make([]string, 0, len(arr))
-		for _, x := range arr {
-			if s, ok := x.(string); ok {
-				out = append(out, s)
-			}
-		}
-		if len(out) == 0 {
-			return []string{"form", "entry", "workflow"}
-		}
-		return out
-	}
-	return []string{"form", "entry", "workflow"}
-}
-
-func hasType(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
+	return out
 }
 
 // IsTTY is a tiny export used by smoke tests to detect a non-TTY stdin

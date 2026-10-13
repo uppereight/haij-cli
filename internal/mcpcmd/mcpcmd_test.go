@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -372,154 +374,142 @@ func TestToolsCall_RLSScoping(t *testing.T) {
 	}
 }
 
-// TestToolsCall_HaijSearchMixedTypes — spec 30 test #88.
+// TestToolsCall_HaijSearchMixedTypes — spec 30 test #88, haij-cli#3.
 //
-// `tools/call haij_search query=lead` returns mixed-type results
-// (form/entry/workflow) in structuredContent.results, each with a
-// `type` field and entity-specific keys, and the same payload as the
-// one text block in content (haij-cli #17: a content item typed
-// `form` is not an MCP ContentBlock). With `types: ["form"]`, only
-// forms come back. All ids stay scoped to the active tenant by virtue
-// of the REST list endpoints being bearer-scoped (RLS).
+// `tools/call haij_search` makes one GET /api/v1/search with q, types[],
+// form_ids[], limit and cursor, and returns the server's hits unchanged
+// in structuredContent.results with has_more and next_cursor, and the
+// same payload as the one text block in content (haij-cli #17: a
+// content item typed `form` is not an MCP ContentBlock). It never
+// falls back to the list endpoints.
 func TestToolsCall_HaijSearchMixedTypes(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/forms", func(w http.ResponseWriter, r *http.Request) {
+	const body = `{"data":[
+		{"type":"workflow","id":"wf_lead","name":"Lead nurture","status":"published","trigger_type":null},
+		{"type":"entry","id":"ent_lead_1","form_id":"frm_lead","submitted_at":"2026-05-02T00:00:00Z"},
+		{"type":"form","id":"frm_lead","title":"Lead capture","status":"published","snippet":"…lead…","updated_at":"2026-05-01T00:00:00Z"}
+	],"has_more":true,"next_cursor":"frm_lead"}`
+	var queries []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/search" {
+			t.Errorf("haij_search called %s %s; it must only call /api/v1/search", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		queries = append(queries, r.URL.Query())
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": [
-				{"id":"frm_lead","title":"Lead capture","status":"published","display_mode":"all_on_page","updated_at":"2026-05-01T00:00:00Z"},
-				{"id":"frm_unrelated","title":"Newsletter signup","status":"draft","display_mode":"all_on_page","updated_at":"2026-05-01T00:00:00Z"}
-			],
-			"has_more": false,
-			"next_cursor": null
-		}`))
-	})
-	mux.HandleFunc("/api/v1/forms/frm_lead/entries", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": [
-				{"id":"ent_lead_1","form_id":"frm_lead","external_id":"crm-lead-42","submitted_at":"2026-05-02T00:00:00Z","response_data":{"submitter_email":"lead@acme.com"}}
-			],
-			"has_more": false,
-			"next_cursor": null
-		}`))
-	})
-	mux.HandleFunc("/api/v1/forms/frm_unrelated/entries", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":[],"has_more":false,"next_cursor":null}`))
-	})
-	mux.HandleFunc("/api/v1/workflows", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": [
-				{"id":"wf_lead","name":"Lead nurture","status":"published","trigger_type":"entry.created"}
-			],
-			"has_more": false,
-			"next_cursor": null
-		}`))
-	})
-	srv := httptest.NewServer(mux)
+		_, _ = w.Write([]byte(body))
+	}))
 	defer srv.Close()
 
 	configHome(t)
 	writeProfile(t, srv.URL, "tok", nil)
 
-	// (1) Mixed query — should return form + entry + workflow.
 	stdin := strings.NewReader(strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haij_search","arguments":{"query":"lead","limit":10}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haij_search","arguments":{"query":"lead","types":["form","entry","workflow"],"form_ids":["frm_lead"],"limit":3,"cursor":"c0"}}}`,
 	}, "\n") + "\n")
 	var stdout, stderr bytes.Buffer
 	exit := RunServeWith(nil, "", false, stdin, &stdout, &stderr, stubFactory(srv))
 	if exit != 0 {
 		t.Fatalf("exit=%d (stderr=%s)", exit, stderr.String())
 	}
+	if len(queries) != 1 {
+		t.Fatalf("expected exactly 1 search request, got %d", len(queries))
+	}
+	q := queries[0]
+	if q.Get("q") != "lead" || strings.Join(q["types[]"], ",") != "form,entry,workflow" ||
+		strings.Join(q["form_ids[]"], ",") != "frm_lead" || q.Get("limit") != "3" || q.Get("cursor") != "c0" {
+		t.Errorf("search query = %v", q)
+	}
 
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(lines))
 	}
-	type searchResult struct {
-		IsError bool `json:"isError"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		StructuredContent struct {
-			Results []map[string]any `json:"results"`
-		} `json:"structuredContent"`
-		Meta struct {
-			Haij struct {
-				Query string  `json:"query"`
-				Total float64 `json:"total"`
-			} `json:"haij"`
-		} `json:"_meta"`
+	type page struct {
+		Results    []map[string]any `json:"results"`
+		HasMore    bool             `json:"has_more"`
+		NextCursor string           `json:"next_cursor"`
 	}
 	var resp struct {
-		Result searchResult `json:"result"`
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			StructuredContent page `json:"structuredContent"`
+			Meta              struct {
+				Haij struct {
+					Query string   `json:"query"`
+					Types []string `json:"types"`
+					Total float64  `json:"total"`
+				} `json:"haij"`
+			} `json:"_meta"`
+		} `json:"result"`
 	}
 	if err := json.Unmarshal([]byte(lines[1]), &resp); err != nil {
 		t.Fatalf("decode: %v\n%s", err, lines[1])
 	}
-	if resp.Result.IsError {
+	r := resp.Result
+	if r.IsError {
 		t.Errorf("expected isError=false on a successful search")
 	}
-	if len(resp.Result.Content) != 1 || resp.Result.Content[0].Type != "text" {
+	if len(r.Content) != 1 || r.Content[0].Type != "text" {
 		t.Fatalf("content must be exactly one text block, got %s", lines[1])
 	}
-	var fromText struct {
-		Results []map[string]any `json:"results"`
+	var fromText page
+	if err := json.Unmarshal([]byte(r.Content[0].Text), &fromText); err != nil {
+		t.Fatalf("text block is not the JSON payload: %v\n%s", err, r.Content[0].Text)
 	}
-	if err := json.Unmarshal([]byte(resp.Result.Content[0].Text), &fromText); err != nil {
-		t.Fatalf("text block is not the JSON payload: %v\n%s", err, resp.Result.Content[0].Text)
+	var server struct {
+		Data []map[string]any `json:"data"`
 	}
-	results := resp.Result.StructuredContent.Results
-	if len(results) < 3 {
-		t.Fatalf("expected >=3 mixed results, got %d: %+v", len(results), results)
+	_ = json.Unmarshal([]byte(body), &server)
+	if !reflect.DeepEqual(r.StructuredContent.Results, server.Data) {
+		t.Errorf("results are not the server's hits unchanged:\n%v\nwant\n%v", r.StructuredContent.Results, server.Data)
 	}
-	if len(fromText.Results) != len(results) {
-		t.Errorf("text block has %d results, structuredContent %d", len(fromText.Results), len(results))
+	if !reflect.DeepEqual(fromText, r.StructuredContent) {
+		t.Errorf("text block %+v differs from structuredContent %+v", fromText, r.StructuredContent)
 	}
-	if resp.Result.Meta.Haij.Query != "lead" || int(resp.Result.Meta.Haij.Total) != len(results) {
-		t.Errorf("_meta.haij = %+v, want query=lead total=%d", resp.Result.Meta.Haij, len(results))
+	if !r.StructuredContent.HasMore || r.StructuredContent.NextCursor != "frm_lead" {
+		t.Errorf("pagination = has_more %v next_cursor %q", r.StructuredContent.HasMore, r.StructuredContent.NextCursor)
 	}
-	seen := map[string]bool{}
-	for _, item := range results {
-		typ, _ := item["type"].(string)
-		seen[typ] = true
-		if typ != "form" && typ != "entry" && typ != "workflow" {
-			t.Errorf("unexpected type %q in mixed results", typ)
-		}
+	if r.Meta.Haij.Query != "lead" || int(r.Meta.Haij.Total) != 3 || len(r.Meta.Haij.Types) != 3 {
+		t.Errorf("_meta.haij = %+v", r.Meta.Haij)
 	}
-	for _, t1 := range []string{"form", "entry", "workflow"} {
-		if !seen[t1] {
-			t.Errorf("expected type %q in mixed results, got %v", t1, seen)
-		}
-	}
+}
 
-	// (2) Filtered by types=["form"] — only forms come back.
-	stdin = strings.NewReader(strings.Join([]string{
+// TestToolsCall_HaijSearchWithoutRoute: a server that predates
+// haij#1012 answers the search with Rails' HTML 404. The tool reports
+// http_404 and makes no other request (no client-side fallback).
+func TestToolsCall_HaijSearchWithoutRoute(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("<!DOCTYPE html><html>not found</html>"))
+	}))
+	defer srv.Close()
+
+	configHome(t)
+	writeProfile(t, srv.URL, "tok", nil)
+
+	stdin := strings.NewReader(strings.Join([]string{
 		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
-		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haij_search","arguments":{"query":"lead","types":["form"]}}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"haij_search","arguments":{"query":"lead"}}}`,
 	}, "\n") + "\n")
-	stdout.Reset()
-	stderr.Reset()
-	exit = RunServeWith(nil, "", false, stdin, &stdout, &stderr, stubFactory(srv))
-	if exit != 0 {
-		t.Fatalf("filtered exit=%d", exit)
+	var stdout, stderr bytes.Buffer
+	if exit := RunServeWith(nil, "", false, stdin, &stdout, &stderr, stubFactory(srv)); exit != 0 {
+		t.Fatalf("exit=%d", exit)
 	}
-	lines = strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	resp.Result = searchResult{}
-	if err := json.Unmarshal([]byte(lines[1]), &resp); err != nil {
-		t.Fatalf("decode filtered: %v\n%s", err, lines[1])
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if !strings.Contains(lines[1], "http_404") || strings.Contains(lines[1], "<html") {
+		t.Errorf("expected a one-line http_404, got: %s", lines[1])
 	}
-	if len(resp.Result.StructuredContent.Results) == 0 {
-		t.Fatalf("expected >=1 form, got 0")
-	}
-	for _, item := range resp.Result.StructuredContent.Results {
-		if item["type"] != "form" {
-			t.Errorf("types filter leaked %v into a form-only search", item["type"])
-		}
+	if len(paths) != 1 || paths[0] != "/api/v1/search" {
+		t.Errorf("requests = %v, want only /api/v1/search", paths)
 	}
 }
 

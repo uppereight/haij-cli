@@ -622,6 +622,23 @@ var catalog = []Command{
 		Args:       []Arg{{Name: "id", Required: true}},
 	},
 
+	// ---- search (1) ---------------------------------------------------
+	{
+		Name: "haij search",
+		Flags: []Flag{
+			{Name: "--types", Type: "list"},
+			{Name: "--form-ids", Type: "list"},
+			{Name: "--limit", Type: "int"},
+			{Name: "--cursor", Type: "string"},
+			profileFlag,
+			jsonFlag,
+		},
+		Summary:    "Search the tenant's forms, entries and workflows; entry hits are ids only, within --form-ids or the last 90 days.",
+		Effect:     EffectRead,
+		Idempotent: true,
+		Args:       []Arg{{Name: "query", Required: true}},
+	},
+
 	// ---- apikeys (3) --------------------------------------------------
 	{
 		Name:       "haij apikeys list",

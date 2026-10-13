@@ -58,9 +58,6 @@ func codeOf(err error) string {
 func TestEveryCatalogueToolHasAHandler(t *testing.T) {
 	h, _ := handlerAgainst(t, 200, `{"data":{}}`)
 	for _, name := range mcptools.TOOL_NAMES {
-		if name == "haij_search" {
-			continue // fans out to three list endpoints; covered by its own tests
-		}
 		_, err := h(context.Background(), name, map[string]any{})
 		if codeOf(err) == "tool_not_found" {
 			t.Errorf("%s is catalogued but has no handler", name)

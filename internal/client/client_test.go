@@ -2,9 +2,11 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -94,5 +96,97 @@ func TestNonJSONErrorResponses(t *testing.T) {
 				t.Errorf("message:\n got %q\nwant %q", apiErr.Message, want)
 			}
 		})
+	}
+}
+
+// TestSearch pins haij-cli#3: Search sends q, types[], form_ids[],
+// limit and cursor to GET /api/v1/search, decodes every hit type, and a
+// hit marshals back to exactly the object the server sent (null snippet
+// and all), so --json and haij_search pass it through.
+func TestSearch(t *testing.T) {
+	const body = `{"data":[
+		{"type":"workflow","id":"wf1","name":"Lead nurture","status":"published","trigger_type":null},
+		{"type":"entry","id":"en1","form_id":"fm1","submitted_at":"2026-10-01T09:00:00Z"},
+		{"type":"form","id":"fm1","title":"Lead capture","status":"published","snippet":null,"updated_at":"2026-09-30T08:00:00Z"}
+	],"has_more":true,"next_cursor":"fm1"}`
+	var gotPath string
+	var gotQuery map[string][]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotQuery = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	c := New(Config{BaseURL: srv.URL, Token: "tok"})
+	page, err := c.Search(context.Background(), SearchOptions{
+		Query:   "lead & co",
+		Types:   []string{"form", "entry"},
+		FormIDs: []string{"fm1", "fm2"},
+		Limit:   5,
+		Cursor:  "zz",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/api/v1/search" {
+		t.Errorf("path = %s", gotPath)
+	}
+	for k, want := range map[string]string{
+		"q":          "lead & co",
+		"types[]":    "form,entry",
+		"form_ids[]": "fm1,fm2",
+		"limit":      "5",
+		"cursor":     "zz",
+	} {
+		if got := strings.Join(gotQuery[k], ","); got != want {
+			t.Errorf("query %s = %q, want %q", k, got, want)
+		}
+	}
+	if len(page.Data) != 3 || !page.HasMore || page.NextCursor != "fm1" {
+		t.Fatalf("page = %+v", page)
+	}
+	if h := page.Data[0]; h.Type != "workflow" || h.Name != "Lead nurture" || h.TriggerType != "" {
+		t.Errorf("workflow hit = %+v", h)
+	}
+	if h := page.Data[1]; h.Type != "entry" || h.FormID != "fm1" || h.SubmittedAt == "" {
+		t.Errorf("entry hit = %+v", h)
+	}
+	if h := page.Data[2]; h.Type != "form" || h.Title != "Lead capture" || h.Status != "published" {
+		t.Errorf("form hit = %+v", h)
+	}
+
+	out, err := json.Marshal(page.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got, want []map[string]any
+	_ = json.Unmarshal(out, &got)
+	var server struct {
+		Data []map[string]any `json:"data"`
+	}
+	_ = json.Unmarshal([]byte(body), &server)
+	want = server.Data
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("hits re-marshal as\n%s\nwant the server's objects", out)
+	}
+}
+
+// TestSearchWithoutRoute: a server that predates haij#1012 answers with
+// Rails' HTML 404, which reaches the caller as the one-line http_404
+// that says the host may not have the route (#4), not a fallback.
+func TestSearchWithoutRoute(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("<!DOCTYPE html><html>not found</html>"))
+	}))
+	defer srv.Close()
+
+	_, err := New(Config{BaseURL: srv.URL, Token: "tok"}).Search(context.Background(), SearchOptions{Query: "x"})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "http_404" || !strings.Contains(apiErr.Message, "may not have this route") {
+		t.Fatalf("err = %v", err)
 	}
 }

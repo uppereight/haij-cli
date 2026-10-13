@@ -35,8 +35,8 @@ Nothing else is gated. There is no dev server.
 - `cmd/haij/main.go` — flag parsing and top-level dispatch. Keeps imports shallow so
   `haij --help` stays under 50 ms.
 - `internal/<family>cmd/` — one package per command family (`forms`, `entries`,
-  `workflows`, `webhooks`, `templates`, `contacts`, `apikeys`, `env`, `auth`, `link`,
-  `doctor`, `listen`, `trigger`, `mcp`, `completion`). Each exports
+  `workflows`, `webhooks`, `templates`, `contacts`, `search`, `apikeys`, `env`,
+  `auth`, `link`, `doctor`, `listen`, `trigger`, `mcp`, `completion`). Each exports
   `Run(args, profile, json, stdout, stderr) int` and returns the process exit code.
 - `internal/client/` — the REST client. Every endpoint path is a string literal here.
 - `internal/envelope/` — the `{ok, data, summary, breadcrumbs, error}` JSON envelope

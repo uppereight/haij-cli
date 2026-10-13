@@ -485,6 +485,15 @@ func (l *pollLoop) forwardEvent(ctx context.Context, ev client.Event) error {
 	req.Header.Set("Haij-Signature", sig)
 	req.Header.Set("Haij-Event", ev.Name)
 	req.Header.Set("Haij-Event-Id", ev.ID)
+	// The server marks a `haij trigger` delivery with these two headers,
+	// outside the signature (haij#1027), and so does listen (#13): a
+	// receiver that drops synthetic events must see them here too.
+	if ev.Synthetic {
+		req.Header.Set("Haij-Synthetic", "true")
+		if ev.TriggerID != nil {
+			req.Header.Set("Haij-Trigger-Id", *ev.TriggerID)
+		}
+	}
 
 	doer := l.doer
 	if doer == nil {
@@ -551,8 +560,16 @@ func (l *pollLoop) emitDelivered(ev client.Event) {
 			"event_id": ev.ID,
 			"name":     ev.Name,
 		}
+		if ev.Synthetic {
+			out["synthetic"] = true
+			out["trigger_id"] = ev.TriggerID
+		}
 		b, _ := json.Marshal(out)
 		fmt.Fprintln(l.stdout, string(b))
+		return
+	}
+	if ev.Synthetic {
+		fmt.Fprintf(l.stdout, "forwarded %s %s (synthetic, haij trigger)\n", ev.Name, ev.ID)
 		return
 	}
 	fmt.Fprintf(l.stdout, "forwarded %s %s\n", ev.Name, ev.ID)

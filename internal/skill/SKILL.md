@@ -287,6 +287,10 @@ newest event as the cursor and forwards nothing earlier (`--json` prints
 event id stops it with exit 2 and `invalid_cursor`; delete the file to start
 from now.
 
+An event `haij trigger` fired reaches the receiver with `Haij-Synthetic: true`
+and `Haij-Trigger-Id`, outside the signature, as haij sends them; a real event
+has neither.
+
 ### `trigger` — fire a fixture event
 
 ```bash

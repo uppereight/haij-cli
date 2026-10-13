@@ -301,6 +301,13 @@ haij trigger entry.updated --fixture fixtures/entry-updated.json
 haij trigger entry.updated --inline '{"id":"...","data":{}}'
 ```
 
+Every active webhook subscribed to the event type gets the payload, signed with
+its real secret and marked `Haij-Synthetic: true` with a `Haij-Trigger-Id`. On a
+production profile (`app.haij.eu`) with any such webhook, `trigger` stops with
+exit 2 and `confirmation_required`, naming how many would get it; pass `--yes`
+to send. `haij webhooks deliveries` shows `synthetic` and `trigger_id`, and the
+table marks those rows `(trigger)`.
+
 ### Add-ons
 
 A command `haij` does not know runs `haij-<name>` from PATH as `haij <name> …`, with

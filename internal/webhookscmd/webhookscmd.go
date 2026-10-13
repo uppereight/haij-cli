@@ -443,7 +443,11 @@ func runDeliveries(c *client.Client, args []string, stdout, stderr io.Writer, js
 		if d.ResponseStatus != nil {
 			resp = strconv.Itoa(*d.ResponseStatus)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n", d.ID, d.WebhookID, d.EventType, d.Status, d.AttemptCount, resp, d.CreatedAt)
+		event := d.EventType
+		if d.Synthetic {
+			event += " (trigger)"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n", d.ID, d.WebhookID, event, d.Status, d.AttemptCount, resp, d.CreatedAt)
 	}
 	_ = tw.Flush()
 	if page.HasMore {

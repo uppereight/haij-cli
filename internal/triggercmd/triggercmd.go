@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
@@ -103,6 +104,31 @@ func RunWith(args []string, globalProfileFlag string, jsonMode bool, stdout, std
 		return res.ExitCode
 	}
 
+	// Production guard (#5): on the hosted app a trigger reaches real
+	// integrations, signed with their real secrets. Marked synthetic
+	// since haij#1027, but a receiver that ignores the marker acts on
+	// it. So count who would get it and ask for --yes first.
+	if !parsed.yes && isProduction(res.Profile.BaseURL) {
+		n, err := countSubscribers(context.Background(), res.Client, parsed.eventType)
+		if err != nil {
+			return cmdutil.EmitClientError(err, stdout, stderr, jsonMode, nil)
+		}
+		if n > 0 {
+			env := envelope.Failure(
+				"confirmation_required",
+				fmt.Sprintf("this profile is production (%s): the payload would go to %d active webhook%s subscribed to %s, "+
+					"signed with their real secrets and marked Haij-Synthetic. Pass --yes to send it.",
+					productionHost, n, pluralS(n), parsed.eventType),
+				map[string]any{"base_url": res.Profile.BaseURL, "event_type": parsed.eventType, "subscribers": n},
+			)
+			env.Breadcrumbs = []envelope.Breadcrumb{
+				{Action: "see who would get it", Cmd: "haij webhooks list --json"},
+				{Action: "send it anyway", Cmd: sendAnyway(args)},
+			}
+			return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
+		}
+	}
+
 	dispatched, dispatchErr := dispatch(context.Background(), res.Client, parsed.eventType, payload)
 	if dispatchErr != nil {
 		return cmdutil.EmitClientError(dispatchErr, stdout, stderr, jsonMode, []envelope.Breadcrumb{
@@ -126,6 +152,7 @@ type flagSet struct {
 	eventType string
 	fixture   string
 	inline    string
+	yes       bool // send on production without asking (#5)
 }
 
 func parseFlags(args []string) (*flagSet, error) {
@@ -158,6 +185,8 @@ func parseFlags(args []string) (*flagSet, error) {
 			i++
 		case strings.HasPrefix(a, "--inline="):
 			out.inline = strings.TrimPrefix(a, "--inline=")
+		case a == "--yes":
+			out.yes = true
 		case a == "--json":
 			// already stripped upstream
 		default:
@@ -171,6 +200,62 @@ func parseFlags(args []string) (*flagSet, error) {
 		return nil, errors.New("missing <event_type> (positional or --event, e.g. entry.updated)")
 	}
 	return out, nil
+}
+
+// productionHost is the hosted app. A profile without a base URL talks
+// to it too (profile.DefaultBaseURL).
+const productionHost = "app.haij.eu"
+
+func isProduction(baseURL string) bool {
+	if baseURL == "" {
+		return true
+	}
+	u, err := url.Parse(baseURL)
+	return err == nil && strings.EqualFold(u.Hostname(), productionHost)
+}
+
+// countSubscribers counts the webhooks a trigger of eventType reaches:
+// active ones whose events include it exactly, as the server picks them
+// (Webhook.subscribed_to).
+func countSubscribers(ctx context.Context, c *client.Client, eventType string) (int, error) {
+	n, cursor := 0, ""
+	for {
+		page, err := c.ListWebhooks(ctx, 100, cursor)
+		if err != nil {
+			return 0, err
+		}
+		for _, w := range page.Data {
+			if !w.Active {
+				continue
+			}
+			for _, e := range w.Events {
+				if e == eventType {
+					n++
+					break
+				}
+			}
+		}
+		if !page.HasMore || page.NextCursor == "" || page.NextCursor == cursor {
+			return n, nil
+		}
+		cursor = page.NextCursor
+	}
+}
+
+// sendAnyway is the trigger command line again, with --yes.
+func sendAnyway(args []string) string {
+	words := []string{"haij", "trigger"}
+	for _, a := range args {
+		words = append(words, cmdutil.ShellQuote(a))
+	}
+	return strings.Join(append(words, "--yes"), " ")
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // loadPayload returns the parsed JSON object — either from the
@@ -239,7 +324,13 @@ Required (exactly one):
   --inline '<json>' Pass the payload literally on the command line
 
 Optional:
+  --yes             Send on production (app.haij.eu) without asking
   --json            Render the basecamp envelope on stdout
+
+Every active webhook subscribed to the event type gets the payload,
+signed with its real secret and marked Haij-Synthetic: true with a
+Haij-Trigger-Id. On a production profile with any such webhook, trigger
+prints how many and stops (exit 2, confirmation_required) unless --yes.
 
 Examples:
   haij trigger entry.updated --fixture ./fixtures/entry_updated.json --json

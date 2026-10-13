@@ -699,6 +699,10 @@ type WebhookDelivery struct {
 	ErrorMessage   *string `json:"error_message"`
 	DeliveredAt    *string `json:"delivered_at"`
 	CreatedAt      string  `json:"created_at"`
+	// Synthetic marks a delivery `haij trigger` fired; TriggerID is that
+	// call's event_id, nil on a real delivery (haij#1027).
+	Synthetic bool    `json:"synthetic"`
+	TriggerID *string `json:"trigger_id"`
 }
 
 // WebhookDeliveryPage is the cursor-paginated deliveries list.

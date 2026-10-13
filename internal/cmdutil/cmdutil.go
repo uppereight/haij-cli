@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -313,4 +314,16 @@ func ExitForStatus(status int) int {
 	default:
 		return 1
 	}
+}
+
+var plainWord = regexp.MustCompile(`^[A-Za-z0-9._@:/+=,-]+$`)
+
+// ShellQuote returns s as one POSIX shell word, for a breadcrumb command
+// a person or agent pastes back: unchanged when it is plain, otherwise
+// single-quoted.
+func ShellQuote(s string) string {
+	if plainWord.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

@@ -65,3 +65,49 @@ func TestListEntriesTool(t *testing.T) {
 		t.Errorf("a bad since reached the server")
 	}
 }
+
+// TestCreateEntryToolKey: haij_create_entry's external_id works only
+// through an Idempotency-Key (haij keeps no external id). The same
+// form_id, external_id and data give the same key; a different
+// external_id or data a new one; no external_id, no key.
+func TestCreateEntryToolKey(t *testing.T) {
+	h, seen := handlerAgainst(t, 201, `{"data":{"id":"e1","form_id":"fm1","submitted_at":"2026-10-15T09:00:00Z","response_data":{"f":"a"},"response_labels":{"f":"a"}}}`)
+	call := func(args map[string]any) {
+		t.Helper()
+		if _, err := h(context.Background(), "haij_create_entry", args); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call(map[string]any{"form_id": "fm1", "external_id": "x1", "data": map[string]any{"f": "a", "g": "b"}})
+	call(map[string]any{"form_id": "fm1", "external_id": "x1", "data": map[string]any{"g": "b", "f": "a"}})
+	call(map[string]any{"form_id": "fm1", "external_id": "x2", "data": map[string]any{"f": "a", "g": "b"}})
+	call(map[string]any{"form_id": "fm1", "external_id": "x1", "data": map[string]any{"f": "z"}})
+	call(map[string]any{"form_id": "fm1", "data": map[string]any{"f": "a"}})
+	r := seen()
+	if len(r) != 5 {
+		t.Fatalf("requests = %d", len(r))
+	}
+	if r[0].Key == "" || r[0].Key != r[1].Key {
+		t.Errorf("a repeat (keys in another order) did not reuse the key: %q vs %q", r[0].Key, r[1].Key)
+	}
+	if r[2].Key == r[0].Key || r[3].Key == r[0].Key || r[2].Key == "" || r[3].Key == "" {
+		t.Errorf("a different external_id or data reused the key: %q %q", r[2].Key, r[3].Key)
+	}
+	if r[4].Key != "" {
+		t.Errorf("no external_id still sent a key: %q", r[4].Key)
+	}
+}
+
+// TestGetEntryToolKeepsEmptyAnswers: an entry with no answers still has
+// response_data in structuredContent, as {}.
+func TestGetEntryToolKeepsEmptyAnswers(t *testing.T) {
+	h, _ := handlerAgainst(t, 200, `{"data":{"id":"e1","form_id":"fm1","submitted_at":"2026-10-15T09:00:00Z","response_data":{},"response_labels":{},"tracking":{}}}`)
+	res, err := h(context.Background(), "haij_get_entry", map[string]any{"form_id": "fm1", "entry_id": "e1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := res.(map[string]any)["content"].([]map[string]any)[0]["text"].(string)
+	if !strings.Contains(text, `"response_data": {}`) {
+		t.Errorf("response_data missing for an entry with no answers: %s", text)
+	}
+}

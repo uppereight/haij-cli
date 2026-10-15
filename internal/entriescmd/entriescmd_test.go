@@ -255,8 +255,7 @@ func TestEntriesListSince(t *testing.T) {
 
 // TestEntriesCreateRoundTrip — spec 30 test #24. The CLI POSTs the
 // payload, sets the Idempotency-Key header, and surfaces the created
-// Entry. A second call with the same --external-id reaches the server
-// (server-side idempotency is not the CLI's job to enforce).
+// Entry as the server answers it (no external_id: haij keeps none).
 func TestEntriesCreateRoundTrip(t *testing.T) {
 	formID := "00000000-0000-7000-8000-000000000222"
 	fieldID := "00000000-0000-7000-8000-000000000ff1"
@@ -278,17 +277,16 @@ func TestEntriesCreateRoundTrip(t *testing.T) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		calls = append(calls, body)
-		ext, _ := body["external_id"].(string)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(fmt.Sprintf(`{
 			"data": {
 				"id":"entry-1",
 				"form_id":%q,
-				"external_id":%q,
 				"submitted_at":"2026-01-01T00:00:00Z",
-				"response_data":{%q:"hello"}
+				"response_data":{%q:"hello"},
+				"response_labels":{%q:"hello"}
 			}
-		}`, formID, ext, fieldID)))
+		}`, formID, fieldID, fieldID)))
 	}))
 	defer srv.Close()
 
@@ -312,8 +310,8 @@ func TestEntriesCreateRoundTrip(t *testing.T) {
 	if data["id"] != "entry-1" {
 		t.Errorf("expected id=entry-1, got %v", data["id"])
 	}
-	if data["external_id"] != "ext-123" {
-		t.Errorf("expected external_id=ext-123, got %v", data["external_id"])
+	if _, ok := data["external_id"]; ok {
+		t.Errorf("output invents an external_id the server never sent: %v", data)
 	}
 	mu.Lock()
 	if len(calls) != 1 {
@@ -439,5 +437,91 @@ func TestEntriesGet(t *testing.T) {
 	}
 	if hits != before {
 		t.Errorf("without --form-id: made a request")
+	}
+}
+
+// TestEntriesCreateIdempotencyKey: haij keeps no external id, so the
+// dedup is the Idempotency-Key alone. The same --form-id, --external-id
+// and --data give the same key (a replay); a different --external-id or
+// --data gives a new one; without --external-id there is still a key.
+func TestEntriesCreateIdempotencyKey(t *testing.T) {
+	var keys []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys = append(keys, r.Header.Get("Idempotency-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"e1","form_id":"fm1","submitted_at":"2026-10-15T09:00:00Z","response_data":{},"response_labels":{}}}`))
+	}))
+	defer srv.Close()
+	configHome(t)
+	writeProfile(t, srv.URL, "test-token")
+	create := func(args ...string) {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if exit := RunWith(append([]string{"create", "--form-id", "fm1"}, args...), "", false, &stdout, &stderr, stubFactory(srv)); exit != 0 {
+			t.Fatalf("%v: exit=%d stderr=%s", args, exit, stderr.String())
+		}
+	}
+	create("--data", `{"f":"a"}`, "--external-id", "ext-1")
+	create("--data", `{"f":"a"}`, "--external-id", "ext-1")
+	create("--data", `{"f":"a"}`, "--external-id", "ext-2")
+	create("--data", `{"f":"b"}`, "--external-id", "ext-1")
+	create("--data", `{"f":"a"}`)
+	if len(keys) != 5 {
+		t.Fatalf("requests = %d", len(keys))
+	}
+	for i, k := range keys {
+		if k == "" {
+			t.Errorf("call %d sent no Idempotency-Key", i)
+		}
+	}
+	if keys[0] != keys[1] {
+		t.Errorf("a repeat got a new key: %s vs %s", keys[0], keys[1])
+	}
+	for i := 2; i < 5; i++ {
+		if keys[i] == keys[0] {
+			t.Errorf("call %d reused the first key", i)
+		}
+	}
+}
+
+// TestEntriesEmptyAnswersKeepTheirKeys: an entry with no answers keeps
+// response_data and response_labels in --json as {} (they were dropped),
+// and the list table has no EXTERNAL_ID column, which was always empty.
+func TestEntriesEmptyAnswersKeepTheirKeys(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/e1") {
+			_, _ = w.Write([]byte(`{"data":{"id":"e1","form_id":"fm1","submitted_at":"2026-10-15T09:00:00Z","response_data":{},"response_labels":{},"tracking":{"utm_source":null}}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":[{"id":"e1","form_id":"fm1","submitted_at":"2026-10-15T09:00:00Z","response_data":{},"response_labels":{}}],"has_more":false,"next_cursor":null}`))
+	}))
+	defer srv.Close()
+	configHome(t)
+	writeProfile(t, srv.URL, "test-token")
+
+	var stdout, stderr bytes.Buffer
+	if exit := RunWith([]string{"get", "--form-id", "fm1", "e1", "--json"}, "", false, &stdout, &stderr, stubFactory(srv)); exit != 0 {
+		t.Fatalf("get exit=%d stderr=%s", exit, stderr.String())
+	}
+	var env struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("decode: %v\n%s", err, stdout.String())
+	}
+	for _, k := range []string{"response_data", "response_labels"} {
+		if got := string(env.Data[k]); got != "{}" {
+			t.Errorf("%s = %q, want {}", k, got)
+		}
+	}
+
+	stdout.Reset()
+	if exit := RunWith([]string{"list", "--form-id", "fm1"}, "", false, &stdout, &stderr, stubFactory(srv)); exit != 0 {
+		t.Fatalf("list exit=%d", exit)
+	}
+	header := strings.SplitN(stdout.String(), "\n", 2)[0]
+	if strings.Fields(header)[2] != "SUBMITTED_AT" || strings.Contains(header, "EXTERNAL_ID") {
+		t.Errorf("table header = %q", header)
 	}
 }

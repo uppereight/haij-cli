@@ -294,7 +294,7 @@ var catalog = []Command{
 			profileFlag,
 			jsonFlag,
 		},
-		Summary:    "Submit an entry; --external-id forwards as Idempotency-Key for safe retries.",
+		Summary:    "Submit an entry; a repeat with the same --form-id, --external-id and --data within 24 hours returns the first entry (Idempotency-Key). haij does not store the external id.",
 		Effect:     EffectWrite,
 		Idempotent: true,
 	},

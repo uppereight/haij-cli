@@ -243,14 +243,14 @@ var tools = []Tool{
 		Name:        "haij_create_entry",
 		Title:       "Submit entry",
 		Annotations: Annotations{Title: "Submit entry", DestructiveHint: true, OpenWorldHint: true},
-		Description: "Submits an entry to a form. `data` maps field_id → value. Pass external_id for client-side deduplication.",
+		Description: "Submits an entry to a form. `data` maps field_id → value. Pass external_id to make a retry safe: the same form_id, external_id and data within 24 hours returns the first entry instead of creating another. haij does not store external_id, and without it every call creates an entry.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"required": ["form_id", "data"],
 			"properties": {
 				"form_id":     {"type": "string", "description": "Form uuid (v7)."},
 				"data":        {"type": "object", "description": "Map of field_id → submitted value."},
-				"external_id": {"type": "string", "maxLength": 255, "description": "Optional client-side dedup key (Idempotency-Key forwarded to REST)."}
+				"external_id": {"type": "string", "maxLength": 255, "description": "Optional retry key: folded into the request's Idempotency-Key with form_id and data. Not stored by haij."}
 			},
 			"additionalProperties": false
 		}`),

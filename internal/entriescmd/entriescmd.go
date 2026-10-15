@@ -3,7 +3,7 @@
 //
 // Commands wired in this package (spec 30 tests #23, #24):
 //
-//	haij entries list   --form-id <id> [--limit N] [--cursor X] [--since ISO-8601] [--json]
+//	haij entries list   [--form-id <id>] [--limit N] [--cursor X] [--since <date|RFC 3339>] [--json]
 //	haij entries get    --form-id <id> <entry_id> [--json]
 //	haij entries create --form-id <id> --data '<json>' [--external-id <ext>] [--json]
 //
@@ -78,6 +78,7 @@ func RunWith(args []string, globalProfileFlag string, jsonMode bool, stdout, std
 
 func runList(c *client.Client, args []string, stdout, stderr io.Writer, jsonMode bool) int {
 	opts := client.ListEntriesOptions{}
+	since := ""
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -101,20 +102,19 @@ func runList(c *client.Client, args []string, stdout, stderr io.Writer, jsonMode
 		case strings.HasPrefix(a, "--cursor="):
 			opts.Cursor = strings.TrimPrefix(a, "--cursor=")
 		case a == "--since" && i+1 < len(args):
-			opts.Since = args[i+1]
+			since = args[i+1]
 			i++
 		case strings.HasPrefix(a, "--since="):
-			opts.Since = strings.TrimPrefix(a, "--since=")
+			since = strings.TrimPrefix(a, "--since=")
 		}
 	}
-
-	if opts.FormID == "" {
-		env := envelope.Failure(
-			"missing_form_id",
-			"haij entries list requires --form-id <uuid>",
-			nil,
-		)
-		return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
+	if since != "" {
+		t, err := client.ParseSince(since)
+		if err != nil {
+			env := envelope.Failure("invalid_flag", "--since: "+err.Error(), nil)
+			return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
+		}
+		opts.Since = t
 	}
 
 	page, err := c.ListEntries(context.Background(), opts)
@@ -130,14 +130,26 @@ func runList(c *client.Client, args []string, stdout, stderr io.Writer, jsonMode
 		}
 		crumbs := []envelope.Breadcrumb{}
 		if page.HasMore {
+			// next_cursor is past the --since boundary, so it alone continues.
+			next := "haij entries list"
+			if opts.FormID != "" {
+				next += " --form-id " + opts.FormID
+			}
 			crumbs = append(crumbs, envelope.Breadcrumb{
 				Action: "next page",
-				Cmd:    fmt.Sprintf("haij entries list --form-id %s --cursor %s", opts.FormID, page.NextCursor),
+				Cmd:    next + " --cursor " + page.NextCursor,
 			})
 		}
-		crumbs = append(crumbs,
-			envelope.Breadcrumb{Action: "submit entry", Cmd: fmt.Sprintf("haij entries create --form-id %s --data '{...}'", opts.FormID)},
-		)
+		if opts.FormID != "" {
+			crumbs = append(crumbs,
+				envelope.Breadcrumb{Action: "submit entry", Cmd: fmt.Sprintf("haij entries create --form-id %s --data '{...}'", opts.FormID)},
+			)
+		} else if len(page.Data) > 0 {
+			e := page.Data[0]
+			crumbs = append(crumbs,
+				envelope.Breadcrumb{Action: "read an entry", Cmd: fmt.Sprintf("haij entries get --form-id %s %s", e.FormID, e.ID)},
+			)
+		}
 		env := envelope.Success(
 			data,
 			fmt.Sprintf("Listed %d entr%s", len(page.Data), entrySuffix(len(page.Data))),
@@ -327,19 +339,20 @@ func entrySuffix(n int) string {
 const helpText = `haij entries — list and submit form entries
 
 Subcommands:
-  list      List entries for a form (cursor pagination, --since filter)
+  list      List entries, oldest first: one form's, or every form's
   get       Fetch one entry: haij entries get --form-id <uuid> <entry_id>
   create    Submit a new entry to a published form
 
 Common flags:
-  --form-id <uuid>      Required by every subcommand
+  --form-id <uuid>      Required by get and create; list without it spans every form
   --json                Emit basecamp-style JSON envelope
   --profile <name>      Override the active profile
 
 list flags:
-  --limit N             Max records per page
+  --limit N             Max records per page (1 to 100, default 50)
   --cursor X            Resume from a previous next_cursor
-  --since ISO-8601      Only return entries with submitted_at >= since
+  --since <time>        Only entries created at or after it: 2026-05-01
+                        (midnight UTC) or 2026-05-01T09:30:00Z
 
 create flags:
   --data '<json>'       JSON object keyed by form field id

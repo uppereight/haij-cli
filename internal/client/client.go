@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -350,35 +351,78 @@ type EntryPage struct {
 	NextCursor string  `json:"next_cursor"`
 }
 
-// ListEntriesOptions controls entries.List.
+// ListEntriesOptions controls ListEntries. FormID scopes the list to
+// one form; without it the list spans every form of the tenant. Since
+// (zero for none) keeps entries created at or after that instant.
 type ListEntriesOptions struct {
 	FormID string
 	Limit  int
 	Cursor string
-	Since  string
+	Since  time.Time
 }
 
-// ListEntries returns one page of entries scoped to a form.
+// ListEntries returns one page of entries, oldest first: one form's
+// (GET /api/v1/forms/:form_id/entries) or every form's
+// (GET /api/v1/entries).
+//
+// The server has no time filter (a `since` parameter is ignored), but it
+// pages on `id > cursor` and accepts any well-formed UUID as the
+// boundary (haij#1281). Entry ids are UUIDv7, stamped by the database
+// at insert (gen_uuid_v7), so Since becomes the cursor that sorts just
+// before the first id of that millisecond. A later Cursor wins.
 func (c *Client) ListEntries(ctx context.Context, opts ListEntriesOptions) (*EntryPage, error) {
-	if opts.FormID == "" {
-		return nil, errors.New("client: ListEntries requires FormID")
-	}
 	q := url.Values{}
 	if opts.Limit > 0 {
 		q.Set("limit", strconv.Itoa(opts.Limit))
 	}
-	if opts.Cursor != "" {
-		q.Set("cursor", opts.Cursor)
+	cursor := opts.Cursor
+	if !opts.Since.IsZero() {
+		floor := SinceCursor(opts.Since)
+		if cursor == "" || (uuidShape.MatchString(cursor) && strings.ToLower(cursor) < floor) {
+			cursor = floor
+		}
 	}
-	if opts.Since != "" {
-		q.Set("since", opts.Since)
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	path := "/api/v1/entries"
+	if opts.FormID != "" {
+		path = "/api/v1/forms/" + url.PathEscape(opts.FormID) + "/entries"
 	}
 	var out EntryPage
-	err := c.do(ctx, "GET", "/api/v1/forms/"+url.PathEscape(opts.FormID)+"/entries", q, nil, "", &out)
-	if err != nil {
+	if err := c.do(ctx, "GET", path, q, nil, "", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+var uuidShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// SinceCursor returns the UUID that sorts just before every UUIDv7 id
+// stamped at or after t: t's Unix milliseconds in the first 48 bits and
+// zeros after. A real v7 id of that millisecond sorts after it, because
+// its version nibble is 7.
+func SinceCursor(t time.Time) string {
+	ms := t.UnixMilli()
+	if ms < 0 {
+		ms = 0
+	}
+	if ms >= 1<<48 {
+		ms = 1<<48 - 1
+	}
+	return fmt.Sprintf("%08x-%04x-0000-0000-000000000000", ms>>16, ms&0xffff)
+}
+
+// ParseSince reads a --since value: an RFC 3339 timestamp, or a date
+// (YYYY-MM-DD), which means midnight UTC.
+func ParseSince(s string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("%q is not a date (2026-05-01) or an RFC 3339 timestamp (2026-05-01T09:30:00Z)", s)
 }
 
 // GetEntry fetches one entry. The route is nested under its form

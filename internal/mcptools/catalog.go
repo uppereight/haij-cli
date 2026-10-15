@@ -56,6 +56,7 @@ var TOOL_NAMES = []string{
 	"haij_update_field",
 	"haij_remove_field",
 	"haij_list_entries",
+	"haij_get_entry",
 	"haij_create_entry",
 	"haij_run_workflow",
 	"haij_search",
@@ -211,15 +212,29 @@ var tools = []Tool{
 		Name:        "haij_list_entries",
 		Title:       "List entries",
 		Annotations: Annotations{Title: "List entries", ReadOnlyHint: true, IdempotentHint: true},
-		Description: "Lists entries for a form. Cursor pagination; `since` filters by created_at >=.",
+		Description: "Lists entries oldest first: one form's with `form_id`, else every form's. Cursor pagination — pass `next_cursor` as `cursor` for the next page. `since` starts at entries created at or after that time.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
-			"required": ["form_id"],
 			"properties": {
-				"form_id": {"type": "string", "description": "Form uuid (v7)."},
+				"form_id": {"type": "string", "description": "Form uuid (v7). Omit to list every form's entries."},
 				"cursor":  {"type": "string", "description": "Opaque cursor returned from the previous page."},
 				"limit":   {"type": "integer", "minimum": 1, "maximum": 100, "description": "Page size (1..100)."},
-				"since":   {"type": "string", "format": "date-time", "description": "ISO8601 timestamp; filter entries created at or after this instant."}
+				"since":   {"type": "string", "description": "Only entries created at or after this time: an RFC 3339 timestamp (2026-05-01T09:30:00Z) or a date (2026-05-01, midnight UTC)."}
+			},
+			"additionalProperties": false
+		}`),
+	},
+	{
+		Name:        "haij_get_entry",
+		Title:       "Get entry",
+		Annotations: Annotations{Title: "Get entry", ReadOnlyHint: true, IdempotentHint: true},
+		Description: "Returns one entry: its answers (response_data keyed by field id, response_labels with choice labels) and its tracking block (UTM source and medium, referrer). Takes the form_id and entry_id of a haij_search entry hit or a haij_list_entries row.",
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"required": ["form_id", "entry_id"],
+			"properties": {
+				"form_id":  {"type": "string", "description": "Form uuid (v7) the entry belongs to."},
+				"entry_id": {"type": "string", "description": "Entry uuid (v7)."}
 			},
 			"additionalProperties": false
 		}`),
@@ -260,7 +275,7 @@ var tools = []Tool{
 		Name:        "haij_search",
 		Title:       "Search forms, entries and workflows",
 		Annotations: Annotations{Title: "Search forms, entries and workflows", ReadOnlyHint: true, IdempotentHint: true},
-		Description: "Searches the active tenant's forms (title, description), workflows (name) and entries (answers), newest first across the three types. Entries are searched within `form_ids`, else within the last 90 days. An entry hit is ids only (`id`, `form_id`, `submitted_at`): page haij_list_entries for that form to read its answers. Cursor pagination — pass `next_cursor` as `cursor` for the next page.",
+		Description: "Searches the active tenant's forms (title, description), workflows (name) and entries (answers), newest first across the three types. Entries are searched within `form_ids`, else within the last 90 days. An entry hit is ids only (`id`, `form_id`, `submitted_at`): read its answers with haij_get_entry. Cursor pagination — pass `next_cursor` as `cursor` for the next page.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"required": ["query"],

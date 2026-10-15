@@ -186,6 +186,8 @@ func newToolCallHandler(c *client.Client) mcpserve.ToolCallHandler {
 			return handleRemoveField(ctx, c, args)
 		case "haij_list_entries":
 			return handleListEntries(ctx, c, args)
+		case "haij_get_entry":
+			return handleGetEntry(ctx, c, args)
 		case "haij_create_entry":
 			return handleCreateEntry(ctx, c, args)
 		case "haij_run_workflow":
@@ -321,26 +323,53 @@ func handlePublishForm(ctx context.Context, c *client.Client, args map[string]an
 	return successResult(form), nil
 }
 
+// handleListEntries lists one form's entries, or every form's when
+// form_id is absent, oldest first. since is applied client-side as a
+// cursor boundary (client.ListEntries).
 func handleListEntries(ctx context.Context, c *client.Client, args map[string]any) (any, error) {
-	id, _ := args["form_id"].(string)
-	if id == "" {
-		return nil, &codedError{code: "validation_failed", status: 422, message: "form_id required"}
+	opts := client.ListEntriesOptions{}
+	if v, ok := args["form_id"].(string); ok {
+		opts.FormID = v
 	}
-	opts := client.ListEntriesOptions{FormID: id}
 	if v, ok := args["cursor"].(string); ok {
 		opts.Cursor = v
 	}
 	if v, ok := args["limit"].(float64); ok {
 		opts.Limit = int(v)
 	}
-	if v, ok := args["since"].(string); ok {
-		opts.Since = v
+	if v, ok := args["since"].(string); ok && v != "" {
+		t, err := client.ParseSince(v)
+		if err != nil {
+			return nil, &codedError{
+				code:    "validation_failed",
+				status:  422,
+				message: "since: " + err.Error(),
+				details: []map[string]any{{"field": "since", "message": err.Error()}},
+			}
+		}
+		opts.Since = t
 	}
 	page, err := c.ListEntries(ctx, opts)
 	if err != nil {
 		return nil, wrapAPIError(err)
 	}
 	return successResult(page), nil
+}
+
+// handleGetEntry returns one entry with its answers and tracking block.
+// The route is nested under the form, so both ids are required; a
+// haij_search entry hit carries both.
+func handleGetEntry(ctx context.Context, c *client.Client, args map[string]any) (any, error) {
+	formID, _ := args["form_id"].(string)
+	id, _ := args["entry_id"].(string)
+	if formID == "" || id == "" {
+		return nil, &codedError{code: "validation_failed", status: 422, message: "form_id and entry_id required"}
+	}
+	entry, err := c.GetEntry(ctx, formID, id)
+	if err != nil {
+		return nil, wrapAPIError(err)
+	}
+	return successResult(entry), nil
 }
 
 func handleCreateEntry(ctx context.Context, c *client.Client, args map[string]any) (any, error) {

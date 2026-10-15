@@ -127,8 +127,10 @@ change on a published form.
 ### `entries` — query and submit entries
 
 ```bash
-# List recent entries, paginated by cursor
+# List one form's entries, or every form's without --form-id. Pages run
+# oldest first; --since starts at a date (midnight UTC) or an RFC 3339 time.
 haij entries list --form-id <form_id> --since 2026-05-01 --json
+haij entries list --since 2026-10-14T08:00:00Z --json
 
 # Fetch one entry (the route is nested under its form)
 haij entries get --form-id <form_id> <entry_id> --json
@@ -328,7 +330,7 @@ haij mcp tools --json
 
 Tools: forms (`haij_list_forms`, `haij_get_form`, `haij_create_form`,
 `haij_publish_form`), form fields (`haij_list_fields`, `haij_add_field`,
-`haij_update_field`, `haij_remove_field`), entries (`haij_list_entries`, `haij_create_entry`),
+`haij_update_field`, `haij_remove_field`), entries (`haij_list_entries`, `haij_get_entry`, `haij_create_entry`),
 `haij_run_workflow`, `haij_search`, email templates (`haij_list_templates`,
 `haij_get_template`, `haij_preview_template`, `haij_create_template`) and
 contacts (`haij_list_contacts`, `haij_get_contact`, `haij_upsert_contact`,

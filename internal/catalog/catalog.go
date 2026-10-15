@@ -261,14 +261,14 @@ var catalog = []Command{
 	{
 		Name: "haij entries list",
 		Flags: []Flag{
-			{Name: "--form-id", Type: "string", Required: true},
+			{Name: "--form-id", Type: "string"},
 			{Name: "--cursor", Type: "string"},
 			{Name: "--limit", Type: "int"},
 			{Name: "--since", Type: "string"},
 			profileFlag,
 			jsonFlag,
 		},
-		Summary:    "List entries for a form with cursor pagination and optional --since filter.",
+		Summary:    "List entries oldest first, one form's (--form-id) or every form's, with cursor pagination; --since starts at a date or time.",
 		Effect:     EffectRead,
 		Idempotent: true,
 	},

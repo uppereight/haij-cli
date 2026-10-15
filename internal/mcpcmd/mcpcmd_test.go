@@ -764,7 +764,7 @@ func TestServeReadOnlyFlag(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &listResp); err != nil {
 		t.Fatalf("decode tools/list: %v", err)
 	}
-	if len(listResp.Result.Tools) != 10 {
-		t.Errorf("expected 10 read tools, got %d", len(listResp.Result.Tools))
+	if len(listResp.Result.Tools) != 11 {
+		t.Errorf("expected 11 read tools, got %d", len(listResp.Result.Tools))
 	}
 }

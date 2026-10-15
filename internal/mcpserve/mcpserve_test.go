@@ -365,7 +365,7 @@ func TestToolsListCarriesTitlesAndHints(t *testing.T) {
 			readOnly[name] = true
 		}
 	}
-	want := []string{"haij_list_forms", "haij_get_form", "haij_list_fields", "haij_list_entries", "haij_search",
+	want := []string{"haij_list_forms", "haij_get_form", "haij_list_fields", "haij_list_entries", "haij_get_entry", "haij_search",
 		"haij_list_templates", "haij_get_template", "haij_preview_template", "haij_list_contacts", "haij_get_contact"}
 	if len(readOnly) != len(want) {
 		t.Errorf("read-only tools = %v, want %v", readOnly, want)
@@ -405,7 +405,7 @@ func TestReadOnlyServesReadToolsOnly(t *testing.T) {
 		name, _ := tool["name"].(string)
 		names = append(names, name)
 	}
-	want := []string{"haij_list_forms", "haij_get_form", "haij_list_fields", "haij_list_entries", "haij_search",
+	want := []string{"haij_list_forms", "haij_get_form", "haij_list_fields", "haij_list_entries", "haij_get_entry", "haij_search",
 		"haij_list_templates", "haij_get_template", "haij_preview_template", "haij_list_contacts", "haij_get_contact"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Errorf("tools/list = %v, want %v", names, want)

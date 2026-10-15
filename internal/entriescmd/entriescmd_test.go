@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -56,8 +57,8 @@ func stubFactory(srv *httptest.Server) cmdutil.ClientFactory {
 }
 
 // TestEntriesListCursorPagination — spec 30 test #23. The CLI
-// faithfully forwards --limit / --cursor / --since to the API and
-// reflects has_more + next_cursor through the envelope.
+// forwards --limit and --cursor to the API and reflects has_more +
+// next_cursor through the envelope (--since: TestEntriesListSince).
 func TestEntriesListCursorPagination(t *testing.T) {
 	formID := "00000000-0000-7000-8000-000000000111"
 	hits := 0
@@ -145,32 +146,110 @@ func TestEntriesListCursorPagination(t *testing.T) {
 	}
 }
 
-// TestEntriesListMissingFormID — entries list without --form-id is a
-// validation error, not a network call.
-func TestEntriesListMissingFormID(t *testing.T) {
+// TestEntriesListEveryForm: without --form-id, list reads every form's
+// entries from GET /api/v1/entries, and its breadcrumbs carry no form
+// id but point at reading the first entry.
+func TestEntriesListEveryForm(t *testing.T) {
+	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("unexpected request to %s", r.URL.Path)
+		paths = append(paths, r.URL.Path+"?"+r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[
+			{"id":"0192a000-0000-7000-8000-000000000001","form_id":"fm1","submitted_at":"2026-10-01T09:00:00Z"},
+			{"id":"0192a000-0000-7000-8000-000000000002","form_id":"fm2","submitted_at":"2026-10-02T09:00:00Z"}
+		],"has_more":true,"next_cursor":"0192a000-0000-7000-8000-000000000002"}`))
 	}))
 	defer srv.Close()
-
 	configHome(t)
 	writeProfile(t, srv.URL, "test-token")
 
 	var stdout, stderr bytes.Buffer
-	exit := RunWith([]string{"list", "--json"}, "", false, &stdout, &stderr, stubFactory(srv))
-	if exit == 0 {
-		t.Fatalf("expected non-zero exit, got 0")
+	if exit := RunWith([]string{"list", "--json"}, "", false, &stdout, &stderr, stubFactory(srv)); exit != 0 {
+		t.Fatalf("exit=%d stderr=%s stdout=%s", exit, stderr.String(), stdout.String())
 	}
-	var env map[string]any
+	if len(paths) != 1 || paths[0] != "/api/v1/entries?" {
+		t.Errorf("requests = %v, want one GET /api/v1/entries", paths)
+	}
+	var env struct {
+		Data struct {
+			Data []map[string]any `json:"data"`
+		} `json:"data"`
+		Breadcrumbs []struct{ Action, Cmd string } `json:"breadcrumbs"`
+	}
 	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
-		t.Fatalf("parse envelope: %v\n%s", err, stdout.String())
+		t.Fatalf("decode: %v\n%s", err, stdout.String())
 	}
-	if env["ok"] != false {
-		t.Errorf("expected ok=false, got %v", env["ok"])
+	if len(env.Data.Data) != 2 {
+		t.Errorf("rows = %v", env.Data.Data)
 	}
-	errObj := env["error"].(map[string]any)
-	if errObj["code"] != "missing_form_id" {
-		t.Errorf("expected code=missing_form_id, got %v", errObj["code"])
+	cmds := map[string]string{}
+	for _, b := range env.Breadcrumbs {
+		cmds[b.Action] = b.Cmd
+	}
+	if want := "haij entries list --cursor 0192a000-0000-7000-8000-000000000002"; cmds["next page"] != want {
+		t.Errorf("next page = %q, want %q", cmds["next page"], want)
+	}
+	if want := "haij entries get --form-id fm1 0192a000-0000-7000-8000-000000000001"; cmds["read an entry"] != want {
+		t.Errorf("read an entry = %q, want %q", cmds["read an entry"], want)
+	}
+	if _, ok := cmds["submit entry"]; ok {
+		t.Errorf("a cross-form list offers submit entry without a form: %v", cmds)
+	}
+}
+
+// TestEntriesListSince pins --since: the server has no time filter, so
+// the CLI never sends `since`; it starts the page at the UUIDv7 boundary
+// of that instant instead. A later --cursor wins over the boundary, an
+// earlier one does not, and a value that is neither a date nor an RFC
+// 3339 time is a usage error before any request.
+func TestEntriesListSince(t *testing.T) {
+	var queries []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query())
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[],"has_more":false,"next_cursor":null}`))
+	}))
+	defer srv.Close()
+	configHome(t)
+	writeProfile(t, srv.URL, "test-token")
+	run := func(args ...string) int {
+		var stdout, stderr bytes.Buffer
+		return RunWith(append([]string{"list"}, args...), "", false, &stdout, &stderr, stubFactory(srv))
+	}
+
+	// 2026-05-01T00:00:00Z is 1777593600000 ms = 0x019de0d5c800: the
+	// first 48 bits of the boundary, everything after them zero.
+	boundary := "019de0d5-c800-0000-0000-000000000000"
+	later := "019de1a0-0001-7000-8000-000000000000"
+	earlier := "0192a000-0000-7000-8000-000000000001"
+	for _, c := range []struct {
+		args       []string
+		wantCursor string
+	}{
+		{[]string{"--since", "2026-05-01"}, boundary},
+		{[]string{"--since=2026-05-01T00:00:00Z", "--form-id", "fm1"}, boundary},
+		{[]string{"--since", "2026-05-01", "--cursor", later}, later},
+		{[]string{"--since", "2026-05-01", "--cursor", earlier}, boundary},
+	} {
+		n := len(queries)
+		if exit := run(c.args...); exit != 0 {
+			t.Fatalf("%v: exit=%d", c.args, exit)
+		}
+		q := queries[n]
+		if q.Has("since") {
+			t.Errorf("%v: sent since=%q, which the server ignores", c.args, q.Get("since"))
+		}
+		if q.Get("cursor") != c.wantCursor {
+			t.Errorf("%v: cursor=%q, want %q", c.args, q.Get("cursor"), c.wantCursor)
+		}
+	}
+
+	n := len(queries)
+	if exit := run("--since", "yesterday", "--json"); exit != 2 {
+		t.Errorf("--since yesterday: exit=%d, want 2", exit)
+	}
+	if len(queries) != n {
+		t.Errorf("a bad --since reached the server")
 	}
 }
 

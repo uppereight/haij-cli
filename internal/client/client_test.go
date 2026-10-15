@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestNonJSONErrorResponses pins #4: an error body that is not the
@@ -188,5 +189,56 @@ func TestSearchWithoutRoute(t *testing.T) {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) || apiErr.Code != "http_404" || !strings.Contains(apiErr.Message, "may not have this route") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// TestSinceCursor: the boundary for t sorts after every UUIDv7 id
+// stamped before t's millisecond and before every id stamped in it or
+// later, so `id > boundary` keeps exactly the entries created at or
+// after t (to the millisecond).
+func TestSinceCursor(t *testing.T) {
+	at := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC) // 1777593600000 ms
+	if got, want := SinceCursor(at), "019de0d5-c800-0000-0000-000000000000"; got != want {
+		t.Fatalf("SinceCursor = %s, want %s", got, want)
+	}
+	b := SinceCursor(at)
+	for _, c := range []struct {
+		id    string
+		after bool
+	}{
+		{"019de0d5-c7ff-7fff-bfff-ffffffffffff", false}, // the millisecond before
+		{"019de0d5-c800-7000-8000-000000000000", true},  // the same millisecond, lowest v7 id
+		{"019de0d5-c801-7000-8000-000000000000", true},  // the millisecond after
+	} {
+		if got := c.id > b; got != c.after {
+			t.Errorf("%s > %s = %v, want %v", c.id, b, got, c.after)
+		}
+	}
+	if got := SinceCursor(time.Unix(-5, 0)); got != "00000000-0000-0000-0000-000000000000" {
+		t.Errorf("before the epoch = %s", got)
+	}
+	if got := SinceCursor(at.Add(999 * time.Microsecond)); got != b {
+		t.Errorf("sub-millisecond part changed the boundary: %s", got)
+	}
+}
+
+// TestParseSince accepts a date (midnight UTC) and an RFC 3339 time with
+// any offset, and nothing else.
+func TestParseSince(t *testing.T) {
+	for in, want := range map[string]time.Time{
+		"2026-05-01":                time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		"2026-05-01T09:30:00Z":      time.Date(2026, 5, 1, 9, 30, 0, 0, time.UTC),
+		"2026-05-01T11:30:00+02:00": time.Date(2026, 5, 1, 9, 30, 0, 0, time.UTC),
+		"2026-05-01T09:30:00.25Z":   time.Date(2026, 5, 1, 9, 30, 0, 250e6, time.UTC),
+	} {
+		got, err := ParseSince(in)
+		if err != nil || !got.Equal(want) {
+			t.Errorf("ParseSince(%q) = %v, %v; want %v", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "yesterday", "2026-5-1", "01/05/2026", "1777593600"} {
+		if _, err := ParseSince(in); err == nil {
+			t.Errorf("ParseSince(%q) accepted", in)
+		}
 	}
 }

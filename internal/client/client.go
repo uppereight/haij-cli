@@ -332,12 +332,13 @@ func (c *Client) DeleteFormField(ctx context.Context, formID, fieldID string) er
 
 // Entry is the public-API shape of a single form entry (spec 30 #23).
 type Entry struct {
-	ID             string         `json:"id"`
-	FormID         string         `json:"form_id"`
-	ExternalID     string         `json:"external_id,omitempty"`
-	SubmittedAt    string         `json:"submitted_at"`
-	ResponseData   map[string]any `json:"response_data,omitempty"`
-	ResponseLabels map[string]any `json:"response_labels,omitempty"`
+	ID          string `json:"id"`
+	FormID      string `json:"form_id"`
+	SubmittedAt string `json:"submitted_at"`
+	// The server always sends both, `{}` for an entry with no answers;
+	// they stay in the output even then.
+	ResponseData   map[string]any `json:"response_data"`
+	ResponseLabels map[string]any `json:"response_labels"`
 	Data           map[string]any `json:"data,omitempty"`
 	// Tracking (utm_source, utm_medium, referrer) is only sent by the
 	// single-entry endpoint, not by list or create.
@@ -439,6 +440,8 @@ func (c *Client) GetEntry(ctx context.Context, formID, id string) (*Entry, error
 }
 
 // EntryCreateInput is the create-entry request body.
+// ExternalID is sent along but haij does not store it (form_submissions
+// has no such column); callers fold it into the Idempotency-Key.
 type EntryCreateInput struct {
 	FormID       string         `json:"-"`
 	ExternalID   string         `json:"external_id,omitempty"`

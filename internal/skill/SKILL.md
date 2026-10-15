@@ -135,7 +135,9 @@ haij entries list --since 2026-10-14T08:00:00Z --json
 # Fetch one entry (the route is nested under its form)
 haij entries get --form-id <form_id> <entry_id> --json
 
-# Submit an entry programmatically (use --external-id for idempotency).
+# Submit an entry programmatically. A repeat with the same --form-id,
+# --external-id and --data within 24 hours returns the first entry (the
+# CLI sends an Idempotency-Key); haij does not store the external id.
 # --data is a JSON object keyed by form field id (see `haij forms get`).
 haij entries create --form-id <form_id> \
   --data '{"<field_id>": "Acme", "<email_field_id>": "ops@acme.com"}' \

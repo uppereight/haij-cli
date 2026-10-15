@@ -379,10 +379,18 @@ func handleCreateEntry(ctx context.Context, c *client.Client, args map[string]an
 	}
 	data, _ := args["data"].(map[string]any)
 	in := client.EntryCreateInput{FormID: id, ResponseData: data}
-	if v, ok := args["external_id"].(string); ok {
+	// external_id is the retry-safety switch: haij does not store it, so
+	// it only works through an Idempotency-Key, made from the same inputs
+	// as the CLI's (form, external id, data). Without it there is no key
+	// and every call creates an entry.
+	key := ""
+	if v, ok := args["external_id"].(string); ok && v != "" {
 		in.ExternalID = v
+		b, _ := json.Marshal(data) // map keys sort, so equal data is equal bytes
+		key = client.IdempotencyKey("mcp", "entries.create",
+			[]string{"--form-id=" + id, "--external-id=" + v, "--data=" + string(b)})
 	}
-	entry, err := c.CreateEntry(ctx, in, "")
+	entry, err := c.CreateEntry(ctx, in, key)
 	if err != nil {
 		return nil, wrapAPIError(err)
 	}

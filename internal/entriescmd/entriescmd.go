@@ -8,9 +8,10 @@
 //	haij entries create --form-id <id> --data '<json>' [--external-id <ext>] [--json]
 //
 // The cursor flow follows the same {data, has_more, next_cursor} shape
-// as `haij forms list`. `--external-id` doubles as the
-// server-acknowledged idempotency token (spec test #24): two calls with
-// the same external_id return the same Entry id.
+// as `haij forms list`. create sends an Idempotency-Key derived from
+// --form-id, --external-id and --data, so a repeat of the same command
+// within haij's 24-hour replay window returns the first entry (spec
+// test #24). haij does not store the external id itself.
 package entriescmd
 
 import (
@@ -228,9 +229,6 @@ func runGet(c *client.Client, args []string, stdout, stderr io.Writer, jsonMode 
 	}
 
 	fmt.Fprintf(stdout, "id:           %s\nform_id:      %s\nsubmitted_at: %s\n", entry.ID, entry.FormID, entry.SubmittedAt)
-	if entry.ExternalID != "" {
-		fmt.Fprintf(stdout, "external_id:  %s\n", entry.ExternalID)
-	}
 	data, _ := json.MarshalIndent(entry.ResponseData, "", "  ")
 	fmt.Fprintf(stdout, "response_data:\n%s\n", data)
 	return 0
@@ -286,10 +284,11 @@ func runCreate(c *client.Client, profileName string, args []string, stdout, stde
 		return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
 	}
 
-	// Server-side idempotency for entries flows through external_id (spec
-	// test #24). We still set the standard `Idempotency-Key` header so
-	// repeat invocations within the same shell are de-duplicated even
-	// when --external-id is omitted.
+	// haij keeps no external id (form_submissions has no such column), so
+	// the dedup is this Idempotency-Key alone (spec test #24): the same
+	// --form-id, --external-id and --data within 24 hours replays the
+	// first entry, with or without --external-id. A different
+	// --external-id is how to submit the same answers twice on purpose.
 	idempotencyKey := client.IdempotencyKey(profileName, "entries.create", []string{
 		"--form-id=" + in.FormID,
 		"--external-id=" + in.ExternalID,
@@ -322,9 +321,9 @@ func runCreate(c *client.Client, profileName string, args []string, stdout, stde
 
 func renderEntriesTable(out io.Writer, entries []client.Entry) {
 	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tFORM_ID\tSUBMITTED_AT\tEXTERNAL_ID")
+	fmt.Fprintln(tw, "ID\tFORM_ID\tSUBMITTED_AT")
 	for _, e := range entries {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.ID, e.FormID, e.SubmittedAt, e.ExternalID)
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", e.ID, e.FormID, e.SubmittedAt)
 	}
 	_ = tw.Flush()
 }
@@ -356,5 +355,9 @@ list flags:
 
 create flags:
   --data '<json>'       JSON object keyed by form field id
-  --external-id <ext>   Server-side idempotency token (same id => same entry)
+  --external-id <ext>   Part of the Idempotency-Key: the same --form-id,
+                        --external-id and --data within 24 hours returns the
+                        first entry. Without it an identical repeat is also
+                        deduplicated; pass a new one to submit the same answers
+                        twice. haij does not store it.
 `

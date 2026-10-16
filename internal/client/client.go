@@ -107,6 +107,10 @@ type Form struct {
 	EntriesCount int    `json:"entries_count"`
 	CreatedAt    string `json:"created_at"`
 	UpdatedAt    string `json:"updated_at"`
+	// WidgetURL is the public link of a published form
+	// (https://…/w/<embed token>), null for any other status (haij#1372).
+	// The embed token for <haij-form token="…"> is its last path segment.
+	WidgetURL *string `json:"widget_url"`
 }
 
 // FormPage is the cursor-paginated forms.list response.
@@ -208,6 +212,11 @@ func (c *Client) CreateForm(ctx context.Context, in FormCreateInput, idempotency
 }
 
 // PublishForm flips a draft form to published. Idempotent.
+//
+// The publication response has its own serializer without widget_url,
+// so when it comes back without a link PublishForm reads the form once
+// more for it. The publish has happened either way: if that read fails
+// the form is returned without a link.
 func (c *Client) PublishForm(ctx context.Context, id, idempotencyKey string) (*Form, error) {
 	var wrap struct {
 		Data Form `json:"data"`
@@ -216,7 +225,13 @@ func (c *Client) PublishForm(ctx context.Context, id, idempotencyKey string) (*F
 	if err != nil {
 		return nil, err
 	}
-	return &wrap.Data, nil
+	form := &wrap.Data
+	if form.WidgetURL == nil && form.Status == "published" {
+		if got, err := c.GetForm(ctx, id); err == nil {
+			form.WidgetURL = got.WidgetURL
+		}
+	}
+	return form, nil
 }
 
 // ArchiveForm moves a form to archived state. Idempotent.

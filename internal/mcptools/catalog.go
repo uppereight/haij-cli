@@ -95,7 +95,7 @@ var tools = []Tool{
 		Name:        "haij_get_form",
 		Title:       "Get form",
 		Annotations: Annotations{Title: "Get form", ReadOnlyHint: true, IdempotentHint: true},
-		Description: "Returns a form and its fields by id. Tenant-scoped — RLS hides forms from other companies.",
+		Description: "Returns a form and its fields by id. widget_url is the published form's public link (null otherwise); the embed token for <haij-form token> is its last path segment. Tenant-scoped — RLS hides forms from other companies.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"required": ["form_id"],
@@ -125,7 +125,7 @@ var tools = []Tool{
 		Name:        "haij_publish_form",
 		Title:       "Publish form",
 		Annotations: Annotations{Title: "Publish form", IdempotentHint: true, OpenWorldHint: true},
-		Description: "Flips a draft form to published. Equivalent to POST /api/v1/forms/:id/publication.",
+		Description: "Flips a draft form to published and returns it with widget_url, its public link. Equivalent to POST /api/v1/forms/:id/publication.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"required": ["form_id"],

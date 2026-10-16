@@ -28,8 +28,8 @@ type fieldArgs struct {
 }
 
 // parseFieldArgs reads --form-id, the positional/--id field id and the
-// field attributes. --required is each command's own (see
-// takeRequiredSwitch and takeRequiredValue) and is gone from args here.
+// field attributes. --required is taken out first (takeRequired) and is
+// gone from args here.
 func parseFieldArgs(args []string) fieldArgs {
 	var f fieldArgs
 	str := func(v string) *string { return &v }
@@ -100,24 +100,12 @@ func parseFieldArgs(args []string) fieldArgs {
 	return f
 }
 
-// takeRequiredSwitch removes add's bare --required from args.
-func takeRequiredSwitch(args []string) ([]string, *bool) {
-	var rest []string
-	var required *bool
-	for _, a := range args {
-		if a == "--required" {
-			b := true
-			required = &b
-			continue
-		}
-		rest = append(rest, a)
-	}
-	return rest, required
-}
-
-// takeRequiredValue removes update's --required true|false from args,
-// so it can also make a field optional again.
-func takeRequiredValue(args []string) ([]string, *bool, string) {
+// takeRequired removes --required from args: `--required true|false` or
+// `--required=true|false`, so update can also make a field optional
+// again. With bare, a --required not followed by true or false means
+// true (add's switch form). add used to read only that switch, so
+// `--required false` made the field REQUIRED and dropped the "false".
+func takeRequired(args []string, bare bool) ([]string, *bool, string) {
 	var rest []string
 	var required *bool
 	errMsg := ""
@@ -132,9 +120,18 @@ func takeRequiredValue(args []string) ([]string, *bool, string) {
 	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		next := ""
+		if i+1 < len(args) {
+			next = args[i+1]
+		}
 		switch {
+		case a == "--required" && (next == "true" || next == "false"):
+			set(next)
+			i++
+		case a == "--required" && bare:
+			set("true")
 		case a == "--required" && i+1 < len(args):
-			set(args[i+1])
+			set(next)
 			i++
 		case strings.HasPrefix(a, "--required="):
 			set(strings.TrimPrefix(a, "--required="))
@@ -174,9 +171,12 @@ func runFieldsList(c *client.Client, args []string, stdout, stderr io.Writer, js
 }
 
 func runFieldsAdd(c *client.Client, args []string, stdout, stderr io.Writer, jsonMode bool) int {
-	args, required := takeRequiredSwitch(args)
+	args, required, requiredErr := takeRequired(args, true)
 	f := parseFieldArgs(args)
 	f.in.Required = required
+	if requiredErr != "" {
+		f.err = requiredErr
+	}
 	switch {
 	case f.err != "":
 		return emit(envelope.Failure("validation_failed", f.err, nil), stdout, stderr, jsonMode, 2)
@@ -196,7 +196,7 @@ func runFieldsAdd(c *client.Client, args []string, stdout, stderr io.Writer, jso
 }
 
 func runFieldsUpdate(c *client.Client, args []string, stdout, stderr io.Writer, jsonMode bool) int {
-	args, required, requiredErr := takeRequiredValue(args)
+	args, required, requiredErr := takeRequired(args, false)
 	f := parseFieldArgs(args)
 	f.in.Required = required
 	if requiredErr != "" {
@@ -259,9 +259,10 @@ const fieldsHelpText = `haij forms fields — a form's fields
 
 Subcommands:
   list     List a form's fields by position (--form-id)
-  add      Add a field (--form-id, --type; --label, --required, --position,
-           --placeholder, --hint, --config '<json>'); without --position it
-           goes last. Pass --idempotency-key to make a retry safe.
+  add      Add a field (--form-id, --type; --label, --required [true|false],
+           --position, --placeholder, --hint, --config '<json>'); a bare
+           --required means true; without --position it goes last. Pass
+           --idempotency-key to make a retry safe.
   update   Change a field (<field_id> --form-id; --required true|false).
            --config REPLACES the whole config: send every key you want kept.
   remove   Delete a field for good, with its child fields and the

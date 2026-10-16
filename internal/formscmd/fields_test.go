@@ -166,3 +166,52 @@ func TestFormsFieldsUsage(t *testing.T) {
 		t.Errorf("usage errors sent %d request(s)", n)
 	}
 }
+
+// TestFormsFieldsAddRequiredValue: add takes --required true|false like
+// update. It used to read only a bare switch, so `--required false`
+// sent required: true and the "false" was dropped. A bare --required
+// still means true, a bad value is a usage error before any request,
+// and no --required sends no required key at all.
+func TestFormsFieldsAddRequiredValue(t *testing.T) {
+	configHome(t)
+	srv, seen := fieldsServer(t, 201, fieldJSON)
+	writeProfile(t, srv.URL, "tok")
+	base := []string{"fields", "add", "--form-id", "form1", "--type", "short_text", "--label", "Note"}
+	for _, c := range []struct {
+		args []string
+		want any // nil: no required key sent
+	}{
+		{[]string{"--required", "false"}, false},
+		{[]string{"--required=false"}, false},
+		{[]string{"--required", "true"}, true},
+		{[]string{"--required", "--hint", "h"}, true}, // bare, before another flag
+		{[]string{"--hint", "h", "--required"}, true}, // bare, last
+		{nil, nil},
+	} {
+		n := len(seen())
+		if exit, _, errOut := runForms(t, srv, append(append([]string{}, base...), c.args...)...); exit != 0 {
+			t.Fatalf("%v: exit=%d stderr=%s", c.args, exit, errOut)
+		}
+		r := seen()[n]
+		got, sent := r.Body["field"]["required"]
+		if c.want == nil {
+			if sent {
+				t.Errorf("%v: sent required=%v", c.args, got)
+			}
+		} else if got != c.want {
+			t.Errorf("%v: sent required=%v, want %v", c.args, got, c.want)
+		}
+		if c.args != nil && r.Body["field"]["label"] != "Note" {
+			t.Errorf("%v: label lost: %v", c.args, r.Body["field"])
+		}
+	}
+
+	n := len(seen())
+	exit, out, _ := runForms(t, srv, append(append([]string{}, base...), "--required=maybe", "--json")...)
+	if exit != 2 || !strings.Contains(out, "must be true or false") {
+		t.Errorf("--required=maybe: exit=%d out=%s", exit, out)
+	}
+	if len(seen()) != n {
+		t.Errorf("--required=maybe reached the server")
+	}
+}

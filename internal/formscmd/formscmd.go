@@ -430,10 +430,14 @@ func runPublish(c *client.Client, profileName string, args []string, stdout, std
 		return emitClientError(err, stdout, stderr, jsonMode)
 	}
 
+	summary := fmt.Sprintf("Published form %s", form.ID)
+	if form.WidgetURL != nil {
+		summary += "; its public link is " + *form.WidgetURL
+	}
 	if jsonMode {
 		env := envelope.Success(
 			form,
-			fmt.Sprintf("Published form %s", form.ID),
+			summary,
 			[]envelope.Breadcrumb{
 				{Action: "fetch", Cmd: fmt.Sprintf("haij forms get %s", form.ID)},
 				{Action: "list entries", Cmd: fmt.Sprintf("haij entries list --form-id %s", form.ID)},
@@ -445,6 +449,9 @@ func runPublish(c *client.Client, profileName string, args []string, stdout, std
 		return 0
 	}
 	fmt.Fprintf(stdout, "Published form %s (status=%s, published_at=%s)\n", form.ID, form.Status, form.PublishedAt)
+	if form.WidgetURL != nil {
+		fmt.Fprintf(stdout, "link: %s\n", *form.WidgetURL)
+	}
 	return 0
 }
 
@@ -758,6 +765,9 @@ func renderFormDetail(out io.Writer, form *client.Form) {
 	if form.PublishedAt != "" {
 		fmt.Fprintf(out, "published_at: %s\n", form.PublishedAt)
 	}
+	if form.WidgetURL != nil {
+		fmt.Fprintf(out, "link:         %s\n", *form.WidgetURL)
+	}
 	fmt.Fprintf(out, "created_at:   %s\n", form.CreatedAt)
 	fmt.Fprintf(out, "updated_at:   %s\n", form.UpdatedAt)
 }
@@ -780,9 +790,9 @@ const helpText = `haij forms — manage forms
 
 Subcommands:
   list      List forms (cursor pagination)
-  get       Fetch one form
+  get       Fetch one form, with its public link once published
   create    Create a draft form
-  publish   Flip a draft form to published
+  publish   Flip a draft form to published and print its public link
   archive   Move a form to archived state
   restore   Move an archived form back to draft
   update    Change a form's --title, --description or --display-mode

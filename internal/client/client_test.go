@@ -242,3 +242,56 @@ func TestParseSince(t *testing.T) {
 		}
 	}
 }
+
+// TestPublishFormWidgetURL pins haij#1372 / haij-cli#26: the publication
+// response has no widget_url, so PublishForm reads the form once for
+// it. When the response already carries it there is no extra read, and
+// a failed read still returns the published form, without a link.
+func TestPublishFormWidgetURL(t *testing.T) {
+	const link = "https://app.haij.eu/w/tok123"
+	for _, c := range []struct {
+		name      string
+		postBody  string
+		getStatus int
+		wantGets  int
+		wantLink  string
+	}{
+		{"publish response has no link", `{"data":{"id":"f1","status":"published"}}`, 200, 1, link},
+		{"publish response has the link", `{"data":{"id":"f1","status":"published","widget_url":"` + link + `"}}`, 200, 0, link},
+		{"the read for the link fails", `{"data":{"id":"f1","status":"published"}}`, 500, 1, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			gets := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.Method == "POST" && r.URL.Path == "/api/v1/forms/f1/publication" {
+					_, _ = w.Write([]byte(c.postBody))
+					return
+				}
+				if r.Method == "GET" && r.URL.Path == "/api/v1/forms/f1" {
+					gets++
+					w.WriteHeader(c.getStatus)
+					if c.getStatus == 200 {
+						_, _ = w.Write([]byte(`{"data":{"id":"f1","status":"published","widget_url":"` + link + `"}}`))
+					} else {
+						_, _ = w.Write([]byte(`{"error":{"code":"internal_error","message":"boom"}}`))
+					}
+					return
+				}
+				t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			}))
+			defer srv.Close()
+			form, err := New(Config{BaseURL: srv.URL, Token: "t"}).PublishForm(context.Background(), "f1", "")
+			if err != nil {
+				t.Fatalf("publish failed: %v", err)
+			}
+			got := ""
+			if form.WidgetURL != nil {
+				got = *form.WidgetURL
+			}
+			if got != c.wantLink || gets != c.wantGets {
+				t.Errorf("link=%q gets=%d, want %q and %d", got, gets, c.wantLink, c.wantGets)
+			}
+		})
+	}
+}

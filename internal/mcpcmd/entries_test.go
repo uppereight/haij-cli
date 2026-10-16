@@ -2,9 +2,13 @@ package mcpcmd
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/uppereight/haij-cli/internal/client"
 )
 
 // TestGetEntryTool: haij_get_entry reads the nested entry route with
@@ -109,5 +113,30 @@ func TestGetEntryToolKeepsEmptyAnswers(t *testing.T) {
 	text := res.(map[string]any)["content"].([]map[string]any)[0]["text"].(string)
 	if !strings.Contains(text, `"response_data": {}`) {
 		t.Errorf("response_data missing for an entry with no answers: %s", text)
+	}
+}
+
+// TestPublishFormToolReturnsLink: haij_publish_form returns the form
+// with widget_url, read from the form when the publication response
+// lacks it (haij-cli#26).
+func TestPublishFormToolReturnsLink(t *testing.T) {
+	const link = "https://app.haij.eu/w/tok123"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == "POST" {
+			_, _ = w.Write([]byte(`{"data":{"id":"f1","status":"published"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":"f1","status":"published","widget_url":"` + link + `"}}`))
+	}))
+	defer srv.Close()
+	h := newToolCallHandler(client.New(client.Config{BaseURL: srv.URL, Token: "t"}))
+	res, err := h(context.Background(), "haij_publish_form", map[string]any{"form_id": "f1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := res.(map[string]any)["content"].([]map[string]any)[0]["text"].(string)
+	if !strings.Contains(text, `"widget_url": "`+link+`"`) {
+		t.Errorf("no widget_url in the result: %s", text)
 	}
 }

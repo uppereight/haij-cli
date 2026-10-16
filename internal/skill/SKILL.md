@@ -85,13 +85,20 @@ haij forms get <form_id> --json
 haij forms create --title "Lead capture" --json
 haij forms update <form_id> --title "Lead capture 2026" --display-mode one_per_page
 
-# Move from draft to published
+# Move from draft to published; prints the public link (data.widget_url)
 haij forms publish <form_id>
 
 # Archive a published form, and move it back to draft
 haij forms archive <form_id>
 haij forms restore <form_id>
 ```
+
+A published form's `widget_url` (in `forms get`, `forms list` and `forms publish`)
+is its public link, `https://…/w/<embed token>`; it is null for a draft or an
+archived form. To embed the form on a site, the embed token for
+`<haij-form token="…">` is that link's last path segment. The loader's
+`data-company-key` is not available over the API yet: copy it from the embed
+snippet in haij.
 
 #### `forms fields` — build a form's fields
 

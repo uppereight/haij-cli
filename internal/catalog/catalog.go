@@ -788,7 +788,7 @@ var catalog = []Command{
 			{Name: "--form-id", Type: "string", Required: true},
 			{Name: "--type", Type: "string", Required: true},
 			{Name: "--label", Type: "string"},
-			{Name: "--required", Type: "bool"},
+			{Name: "--required", Type: "enum", Values: []string{"true", "false"}},
 			{Name: "--position", Type: "int"},
 			{Name: "--placeholder", Type: "string"},
 			{Name: "--hint", Type: "string"},

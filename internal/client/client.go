@@ -472,15 +472,14 @@ func (c *Client) CreateEntry(ctx context.Context, in EntryCreateInput, idempoten
 
 // Workflow is the public-API shape of a workflow (spec 30 #25-#26).
 type Workflow struct {
-	ID          string         `json:"id"`
-	Name        string         `json:"name"`
-	Status      string         `json:"status"`
-	TriggerType string         `json:"trigger_type,omitempty"`
-	FormID      string         `json:"form_id,omitempty"`
-	PublishedAt string         `json:"published_at,omitempty"`
-	CreatedAt   string         `json:"created_at,omitempty"`
-	UpdatedAt   string         `json:"updated_at,omitempty"`
-	Definition  map[string]any `json:"definition,omitempty"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Status      string `json:"status"`
+	TriggerType string `json:"trigger_type,omitempty"`
+	FormID      string `json:"form_id,omitempty"`
+	PublishedAt string `json:"published_at,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
 }
 
 // WorkflowPage is the cursor-paginated workflows.list response.
@@ -490,12 +489,12 @@ type WorkflowPage struct {
 	NextCursor string     `json:"next_cursor"`
 }
 
-// WorkflowInput is shared between create and update.
+// WorkflowInput is shared between create and update: the only fields
+// the API takes. A workflow's steps have no API route yet (haij#1064).
 type WorkflowInput struct {
-	Name        string         `json:"name,omitempty"`
-	TriggerType string         `json:"trigger_type,omitempty"`
-	FormID      string         `json:"form_id,omitempty"`
-	Definition  map[string]any `json:"definition,omitempty"`
+	Name        string `json:"name,omitempty"`
+	TriggerType string `json:"trigger_type,omitempty"`
+	FormID      string `json:"form_id,omitempty"`
 }
 
 // WorkflowExecution is the response from `haij workflows run`.

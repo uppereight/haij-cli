@@ -125,3 +125,21 @@ func TestUnknownFlagCases(t *testing.T) {
 		}
 	})
 }
+
+// TestDefinitionReachesItsRefusal: --definition is a hidden flag on
+// workflows create/update, so the unknown-flag check lets it through and
+// the command explains why it is refused (steps_not_supported), rather
+// than a generic invalid_flag.
+func TestDefinitionReachesItsRefusal(t *testing.T) {
+	for _, args := range [][]string{
+		{"workflows", "create", "--name", "x", "--trigger-type", "form_submission", "--definition", "{}", "--json"},
+		{"workflows", "update", "wf1", "--definition", "{}", "--json"},
+	} {
+		hits, _ := helpFixture(t)
+		var stdout, stderr bytes.Buffer
+		exit := run(args, &stdout, &stderr)
+		if exit != 2 || !strings.Contains(stdout.String(), `"steps_not_supported"`) || hits.Load() != 0 {
+			t.Errorf("%v: exit=%d requests=%d stdout=%s", args, exit, hits.Load(), stdout.String())
+		}
+	}
+}

@@ -5,8 +5,8 @@
 //
 //	haij workflows list                     [--limit N] [--cursor X] [--json]
 //	haij workflows get <id>                 [--json]
-//	haij workflows create   --name <n> --trigger-type <t> [--form-id <id>] [--definition <json>] [--json]
-//	haij workflows update <id> [--name <n>] [--definition <json>] [--json]
+//	haij workflows create   --name <n> --trigger-type <t> [--form-id <id>] [--json]
+//	haij workflows update <id> --name <n> [--json]
 //	haij workflows publish <id>             [--json]   (prints the page to publish it in haij)
 //	haij workflows unpublish <id>           [--json]   (back to draft; idempotent)
 //	haij workflows destroy <id>             [--json]
@@ -88,6 +88,15 @@ func RunWith(args []string, globalProfileFlag string, jsonMode bool, stdout, std
 	if cmdutil.WantsHelp(args[1:]) {
 		fmt.Fprint(stdout, helpText)
 		return 0
+	}
+	// Refused before the profile and its entitlement check, so it costs
+	// no request (the parsers refuse it too).
+	if args[0] == "create" || args[0] == "update" {
+		for _, a := range args[1:] {
+			if a == "--definition" || strings.HasPrefix(a, "--definition=") {
+				return refuseDefinition(stdout, stderr, jsonMode)
+			}
+		}
 	}
 
 	res := cmdutil.ResolveAndPreflight(cmdutil.ResolveOptions{
@@ -190,7 +199,6 @@ func runGet(c *client.Client, args []string, stdout, stderr io.Writer, jsonMode 
 
 func runCreate(c *client.Client, profileName string, args []string, stdout, stderr io.Writer, jsonMode bool) int {
 	in := client.WorkflowInput{}
-	defJSON := ""
 	idempotencyKey := ""
 	rawArgs := []string{}
 	for i := 0; i < len(args); i++ {
@@ -217,11 +225,8 @@ func runCreate(c *client.Client, profileName string, args []string, stdout, stde
 		case strings.HasPrefix(a, "--form-id="):
 			in.FormID = strings.TrimPrefix(a, "--form-id=")
 			rawArgs = append(rawArgs, a)
-		case a == "--definition" && i+1 < len(args):
-			defJSON = args[i+1]
-			i++
-		case strings.HasPrefix(a, "--definition="):
-			defJSON = strings.TrimPrefix(a, "--definition=")
+		case a == "--definition" || strings.HasPrefix(a, "--definition="):
+			return refuseDefinition(stdout, stderr, jsonMode)
 		case a == "--idempotency-key" && i+1 < len(args):
 			idempotencyKey = args[i+1]
 			i++
@@ -237,12 +242,6 @@ func runCreate(c *client.Client, profileName string, args []string, stdout, stde
 	if in.TriggerType == "" {
 		env := envelope.Failure("missing_trigger_type", "haij workflows create requires --trigger-type <string>", nil)
 		return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
-	}
-	if defJSON != "" {
-		if err := json.Unmarshal([]byte(defJSON), &in.Definition); err != nil {
-			env := envelope.Failure("validation_failed", fmt.Sprintf("--definition is not valid JSON: %s", err.Error()), nil)
-			return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
-		}
 	}
 
 	if idempotencyKey == "" {
@@ -274,7 +273,6 @@ func runCreate(c *client.Client, profileName string, args []string, stdout, stde
 func runUpdate(c *client.Client, profileName string, args []string, stdout, stderr io.Writer, jsonMode bool) int {
 	id := ""
 	in := client.WorkflowInput{}
-	defJSON := ""
 	idempotencyKey := ""
 	rawArgs := []string{}
 	for i := 0; i < len(args); i++ {
@@ -287,11 +285,8 @@ func runUpdate(c *client.Client, profileName string, args []string, stdout, stde
 		case strings.HasPrefix(a, "--name="):
 			in.Name = strings.TrimPrefix(a, "--name=")
 			rawArgs = append(rawArgs, a)
-		case a == "--definition" && i+1 < len(args):
-			defJSON = args[i+1]
-			i++
-		case strings.HasPrefix(a, "--definition="):
-			defJSON = strings.TrimPrefix(a, "--definition=")
+		case a == "--definition" || strings.HasPrefix(a, "--definition="):
+			return refuseDefinition(stdout, stderr, jsonMode)
 		case a == "--idempotency-key" && i+1 < len(args):
 			idempotencyKey = args[i+1]
 			i++
@@ -310,11 +305,11 @@ func runUpdate(c *client.Client, profileName string, args []string, stdout, stde
 		env := envelope.Failure("missing_workflow_id", "haij workflows update requires <workflow_id>", nil)
 		return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
 	}
-	if defJSON != "" {
-		if err := json.Unmarshal([]byte(defJSON), &in.Definition); err != nil {
-			env := envelope.Failure("validation_failed", fmt.Sprintf("--definition is not valid JSON: %s", err.Error()), nil)
-			return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
-		}
+	// The API changes only the name; without it the PATCH would be empty
+	// and still answer 200.
+	if in.Name == "" {
+		env := envelope.Failure("nothing_to_update", "haij workflows update needs --name; a workflow's steps are edited in haij", nil)
+		return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
 	}
 	if idempotencyKey == "" {
 		idempotencyKey = client.IdempotencyKey(profileName, "workflows.update", append([]string{id}, rawArgs...))
@@ -339,6 +334,17 @@ func runUpdate(c *client.Client, profileName string, args []string, stdout, stde
 	}
 	fmt.Fprintf(stdout, "Updated workflow %s — %q\n", wf.ID, wf.Name)
 	return 0
+}
+
+// refuseDefinition answers --definition on create and update. The API
+// takes a workflow's name, trigger and form but has no route for its
+// steps (haij#1064), so the definition used to be sent, dropped by the
+// server, and reported as a success with no steps.
+func refuseDefinition(stdout, stderr io.Writer, jsonMode bool) int {
+	env := envelope.Failure("steps_not_supported",
+		"haij's API can't set a workflow's steps yet, so --definition would be dropped and the workflow left without steps. "+
+			"Run the command without --definition and add the steps in haij.", nil)
+	return cmdutil.Emit(env, stdout, stderr, jsonMode, 2)
 }
 
 func runPublish(c *client.Client, profileName string, args []string, stdout, stderr io.Writer, jsonMode bool) int {

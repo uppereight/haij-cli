@@ -149,9 +149,12 @@ haij entries create --form-id <form_id> \
 ```bash
 haij workflows list --json
 haij workflows get <workflow_id> --json
+# create makes a draft with NO steps: the API can't set steps yet, so
+# --definition is refused (exit 2, steps_not_supported). A person adds the
+# steps in haij. update renames it.
 haij workflows create --name "Lead follow-up" --trigger-type <trigger> \
-  --form-id <form_id> --definition "$(cat workflow.json)" --json
-haij workflows update <workflow_id> --definition "$(cat patch.json)" --json
+  --form-id <form_id> --json
+haij workflows update <workflow_id> --name "Lead follow-up (EU)" --json
 # Workflows go live in the app only: publish exits 3 with error code
 # publish_in_app and the page to publish it on (error.details.url).
 # Hand that URL to a person; `run` needs a published workflow.

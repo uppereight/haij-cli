@@ -367,3 +367,51 @@ func TestWorkflowsUnpublish(t *testing.T) {
 		t.Errorf("no id: exit=%d calls=%d", exit, calls)
 	}
 }
+
+// TestWorkflowsDefinitionRefused: the API has no route for a workflow's
+// steps, and the server dropped a sent definition, so --definition used
+// to report success while setting nothing. Now create and update refuse
+// it (exit 2, steps_not_supported) before any request, and update with
+// nothing to change is a usage error instead of an empty PATCH.
+func TestWorkflowsDefinitionRefused(t *testing.T) {
+	var mu sync.Mutex
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"id":"wf1","name":"x","status":"draft","trigger_type":"form_submission"}}`))
+	}))
+	defer srv.Close()
+	configHome(t)
+	writeProfile(t, srv.URL, "tok")
+
+	for _, c := range []struct {
+		args []string
+		code string
+	}{
+		{[]string{"create", "--name", "x", "--trigger-type", "form_submission", "--definition", `{"steps":[]}`}, "steps_not_supported"},
+		{[]string{"create", "--name", "x", "--trigger-type", "form_submission", `--definition={"steps":[]}`}, "steps_not_supported"},
+		{[]string{"update", "wf1", "--definition", `{"steps":[]}`}, "steps_not_supported"},
+		{[]string{"update", "wf1", "--name", "y", "--definition", `{}`}, "steps_not_supported"},
+		{[]string{"update", "wf1"}, "nothing_to_update"},
+	} {
+		var stdout, stderr bytes.Buffer
+		exit := RunWith(append(c.args, "--json"), "", false, &stdout, &stderr, stubFactory(srv))
+		if exit != 2 || !strings.Contains(stdout.String(), `"`+c.code+`"`) {
+			t.Errorf("%v: exit=%d, want 2 and %s; stdout=%s", c.args, exit, c.code, stdout.String())
+		}
+	}
+	mu.Lock()
+	if requests != 0 {
+		t.Errorf("%d request(s) reached the server", requests)
+	}
+	mu.Unlock()
+
+	// A rename still goes through.
+	var stdout, stderr bytes.Buffer
+	if exit := RunWith([]string{"update", "wf1", "--name", "y", "--json"}, "", false, &stdout, &stderr, stubFactory(srv)); exit != 0 {
+		t.Fatalf("rename: exit=%d stdout=%s", exit, stdout.String())
+	}
+}
